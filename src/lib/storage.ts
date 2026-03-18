@@ -10,10 +10,17 @@ import {
   RunCheckpoint,
   RunCheckpointStage,
 } from "@/types";
-import { MODEL_SELECTION_LIMITS, getDefaultModels, resolveSelectedModels } from "./models";
+import {
+  MODEL_SELECTION_LIMITS,
+  createBringYourOwnModel,
+  getDefaultModels,
+  getModelById,
+  resolveSelectedModels,
+} from "./models";
 
 const DATA_DIR = path.join(process.cwd(), "data");
 const RUNS_DIR = path.join(DATA_DIR, "runs");
+const LEGACY_DATA_DIR = DATA_DIR;
 
 export interface BenchmarkRepository {
   createRun(input: CreateBenchmarkRunInput): Promise<BenchmarkRun>;
@@ -27,6 +34,14 @@ export interface BenchmarkRepository {
 
 async function ensureDataDir() {
   await fs.mkdir(RUNS_DIR, { recursive: true });
+}
+
+async function safeReaddir(directory: string): Promise<string[]> {
+  try {
+    return await fs.readdir(directory);
+  } catch {
+    return [];
+  }
 }
 
 function generateId(): string {
@@ -86,6 +101,169 @@ function toSummary(run: BenchmarkRun): BenchmarkRunSummary {
 async function runPath(id: string): Promise<string> {
   await ensureDataDir();
   return path.join(RUNS_DIR, `${id}.json`);
+}
+
+async function legacyRunPath(id: string): Promise<string> {
+  return path.join(LEGACY_DATA_DIR, `${id}.json`);
+}
+
+function inferSelectedModels(run: Partial<BenchmarkRun>) {
+  const knownIds = new Set<string>();
+  const orderedIds: string[] = [];
+
+  for (const entry of run.ideas ?? []) {
+    if (!knownIds.has(entry.modelId)) {
+      knownIds.add(entry.modelId);
+      orderedIds.push(entry.modelId);
+    }
+  }
+  for (const entry of run.revisedIdeas ?? []) {
+    if (!knownIds.has(entry.modelId)) {
+      knownIds.add(entry.modelId);
+      orderedIds.push(entry.modelId);
+    }
+  }
+  for (const entry of run.critiqueVotes ?? []) {
+    if (!knownIds.has(entry.fromModelId)) {
+      knownIds.add(entry.fromModelId);
+      orderedIds.push(entry.fromModelId);
+    }
+  }
+  for (const entry of run.finalRankings ?? []) {
+    if (!knownIds.has(entry.judgeModelId)) {
+      knownIds.add(entry.judgeModelId);
+      orderedIds.push(entry.judgeModelId);
+    }
+  }
+
+  return orderedIds.map((modelId) => getModelById(modelId) ?? createBringYourOwnModel(modelId));
+}
+
+function normalizeLegacyRun(run: Partial<BenchmarkRun>): BenchmarkRun {
+  const selectedModels = run.selectedModels?.length ? run.selectedModels : inferSelectedModels(run);
+  const participantCount = selectedModels.length;
+  const ideas = run.ideas ?? [];
+  const critiqueVotes = run.critiqueVotes ?? [];
+  const revisedIdeas = run.revisedIdeas ?? [];
+  const finalRankings = run.finalRankings ?? [];
+  const failedModels = run.failedModels ?? [];
+  const humanCritiques = run.humanCritiques ?? [];
+  const modelStates =
+    run.modelStates && Object.keys(run.modelStates).length > 0
+      ? run.modelStates
+      : buildModelStates(selectedModels);
+
+  for (const idea of ideas) {
+    modelStates[idea.modelId] = {
+      modelId: idea.modelId,
+      stage: "generate",
+      status: "complete",
+      completedAt: idea.timestamp,
+    };
+  }
+  for (const vote of critiqueVotes) {
+    modelStates[vote.fromModelId] = {
+      modelId: vote.fromModelId,
+      stage: "critique",
+      status: "complete",
+      completedAt: new Date().toISOString(),
+    };
+  }
+  for (const revisedIdea of revisedIdeas) {
+    modelStates[revisedIdea.modelId] = {
+      modelId: revisedIdea.modelId,
+      stage: "revise",
+      status: "complete",
+      completedAt: revisedIdea.timestamp,
+    };
+  }
+  for (const ranking of finalRankings) {
+    modelStates[ranking.judgeModelId] = {
+      modelId: ranking.judgeModelId,
+      stage: "vote",
+      status: "complete",
+      completedAt: new Date().toISOString(),
+    };
+  }
+  for (const failedModel of failedModels) {
+    modelStates[failedModel] = {
+      modelId: failedModel,
+      stage: run.checkpoint?.stage ?? "generate",
+      status: "failed",
+      completedAt: new Date().toISOString(),
+    };
+  }
+
+  return {
+    id: run.id ?? generateId(),
+    categoryId: run.categoryId ?? "venture",
+    prompt: run.prompt ?? "",
+    selectedModels,
+    timestamp: run.timestamp ?? new Date().toISOString(),
+    updatedAt: run.updatedAt ?? run.timestamp ?? new Date().toISOString(),
+    status: run.status ?? "complete",
+    currentStep: run.currentStep ?? (run.status === "complete" ? "Benchmark complete!" : "Recovered legacy run"),
+    exposureMode: run.exposureMode ?? "public_full",
+    error: run.error,
+    ideas,
+    critiqueVotes,
+    humanCritiques,
+    revisedIdeas,
+    finalRankings,
+    failedModels,
+    modelStates,
+    failures: run.failures ?? [],
+    checkpoint:
+      run.checkpoint ??
+      createCheckpointForStage(
+        finalRankings.length > 0
+          ? "complete"
+          : revisedIdeas.length > 0
+            ? "vote"
+            : critiqueVotes.length > 0
+              ? "revise"
+              : "generate",
+        selectedModels.map((model) => model.id),
+        revisedIdeas.map((idea) => idea.modelId)
+      ),
+    cancellation: run.cancellation ?? { requested: false },
+    circuitBreaker: run.circuitBreaker ?? createCircuitBreakerState(),
+    metadata:
+      run.metadata ?? {
+        participantCount,
+        minimumSuccessfulModels: minimumSuccessfulModels(participantCount),
+      },
+  };
+}
+
+async function readRunFile(filePath: string): Promise<BenchmarkRun> {
+  const content = await fs.readFile(filePath, "utf-8");
+  return normalizeLegacyRun(JSON.parse(content) as Partial<BenchmarkRun>);
+}
+
+async function migrateLegacyRuns() {
+  await ensureDataDir();
+  const legacyFiles = (await safeReaddir(LEGACY_DATA_DIR)).filter(
+    (file) => file.endsWith(".json") && file.startsWith("bench_")
+  );
+
+  for (const file of legacyFiles) {
+    const source = path.join(LEGACY_DATA_DIR, file);
+    const destination = path.join(RUNS_DIR, file);
+    try {
+      await fs.access(destination);
+      continue;
+    } catch {
+      // Destination missing; continue migration.
+    }
+
+    try {
+      const normalized = await readRunFile(source);
+      await fs.writeFile(destination, JSON.stringify(normalized, null, 2), "utf-8");
+    } catch {
+      // Ignore unreadable legacy runs.
+    }
+  }
 }
 
 class FileBenchmarkRepository implements BenchmarkRepository {
@@ -149,12 +327,17 @@ class FileBenchmarkRepository implements BenchmarkRepository {
   }
 
   async loadRun(id: string): Promise<BenchmarkRun | null> {
+    await migrateLegacyRuns();
     try {
       const filePath = await runPath(id);
-      const content = await fs.readFile(filePath, "utf-8");
-      return JSON.parse(content) as BenchmarkRun;
+      return await readRunFile(filePath);
     } catch {
-      return null;
+      try {
+        const legacyPath = await legacyRunPath(id);
+        return await readRunFile(legacyPath);
+      } catch {
+        return null;
+      }
     }
   }
 
@@ -171,15 +354,13 @@ class FileBenchmarkRepository implements BenchmarkRepository {
 
   async listRuns(): Promise<BenchmarkRun[]> {
     await ensureDataDir();
+    await migrateLegacyRuns();
     try {
-      const files = await fs.readdir(RUNS_DIR);
+      const files = await safeReaddir(RUNS_DIR);
       const runs = await Promise.all(
         files
           .filter((file) => file.endsWith(".json"))
-          .map(async (file) => {
-            const content = await fs.readFile(path.join(RUNS_DIR, file), "utf-8");
-            return JSON.parse(content) as BenchmarkRun;
-          })
+          .map(async (file) => readRunFile(path.join(RUNS_DIR, file)))
       );
       runs.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
       return runs;

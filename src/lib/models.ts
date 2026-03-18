@@ -5,6 +5,20 @@ export const MODEL_SELECTION_LIMITS = {
   max: 8,
 } as const;
 
+const legacyModelAliases: Record<string, string> = {
+  "gpt-5.4": "gpt-5.2-pro",
+  "gpt-5.4-mini": "gpt-5-mini",
+  "claude-sonnet-4.5": "claude-sonnet-4.6",
+  "gemini-2.5-pro": "gemini-3.1-pro-preview",
+  "gemini-2.5-flash": "gemini-3.1-flash-lite-preview",
+  "gemini-3-flash": "gemini-3.1-flash-lite-preview",
+  "grok-4.1-fast": "grok-4-fast",
+  "kimi-k2": "kimi-k2.5",
+  "glm-4.5": "glm-5",
+  "mistral-large": "mistral-medium-3.1",
+  "ministral-8b": "mistral-small-3.2-24b-instruct-2506",
+};
+
 const curatedCatalog: ModelCatalogEntry[] = [
   {
     id: "gpt-5.4",
@@ -212,7 +226,10 @@ export function getDefaultModels(): ModelCatalogEntry[] {
 }
 
 export function getModelById(id: string): ModelCatalogEntry | undefined {
-  return getModelCatalog().find((model) => model.id === id);
+  const direct = getModelCatalog().find((model) => model.id === id);
+  if (direct) return direct;
+  const alias = legacyModelAliases[id];
+  return alias ? getModelCatalog().find((model) => model.id === alias) : undefined;
 }
 
 export function getModelByOpenRouterId(openRouterId: string): ModelCatalogEntry | undefined {
