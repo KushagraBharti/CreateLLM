@@ -1,57 +1,42 @@
 import { NextRequest } from "next/server";
-import { runBenchmark } from "@/lib/engine";
+import { createAndQueueRun, ensureSchedulerBootstrapped } from "@/lib/run-scheduler";
+import { getDefaultModels } from "@/lib/models";
 
-// Allow up to 5 minutes for the full benchmark (4 stages, multiple model calls)
-export const maxDuration = 300;
+export const maxDuration = 60;
 
 export async function POST(request: NextRequest) {
-  const { categoryId, prompt } = await request.json();
+  await ensureSchedulerBootstrapped();
 
-  if (!categoryId || !prompt) {
+  const body = await request.json();
+  const categoryId = body.categoryId as string | undefined;
+  const prompt = body.prompt as string | undefined;
+  const selectedModelIds = Array.isArray(body.selectedModelIds)
+    ? (body.selectedModelIds as string[])
+    : getDefaultModels().map((model) => model.id);
+  const customModelIds = Array.isArray(body.customModelIds)
+    ? (body.customModelIds as string[])
+    : [];
+
+  if (!categoryId || !prompt?.trim()) {
     return Response.json(
       { error: "categoryId and prompt are required" },
       { status: 400 }
     );
   }
 
-  // Use Server-Sent Events to stream progress
-  const encoder = new TextEncoder();
-  const stream = new ReadableStream({
-    async start(controller) {
-      const onToken = (modelId: string, stage: string, chunk: string) => {
-        try {
-          controller.enqueue(
-            encoder.encode(`data: ${JSON.stringify({ type: "token", modelId, stage, chunk })}\n\n`)
-          );
-        } catch {
-          // controller may be closed if client disconnected
-        }
-      };
+  try {
+    const run = await createAndQueueRun({
+      categoryId,
+      prompt: prompt.trim(),
+      selectedModelIds,
+      customModelIds,
+    });
 
-      try {
-        for await (const progress of runBenchmark(categoryId, prompt, { onToken })) {
-          const data = JSON.stringify(progress);
-          controller.enqueue(encoder.encode(`data: ${data}\n\n`));
-        }
-        controller.enqueue(encoder.encode("data: [DONE]\n\n"));
-      } catch (error) {
-        const errorMsg = error instanceof Error ? error.message : "Unknown error";
-        controller.enqueue(
-          encoder.encode(
-            `data: ${JSON.stringify({ status: "error", step: errorMsg })}\n\n`
-          )
-        );
-      } finally {
-        controller.close();
-      }
-    },
-  });
-
-  return new Response(stream, {
-    headers: {
-      "Content-Type": "text/event-stream",
-      "Cache-Control": "no-cache",
-      Connection: "keep-alive",
-    },
-  });
+    return Response.json({ id: run.id, status: run.status });
+  } catch (error) {
+    return Response.json(
+      { error: error instanceof Error ? error.message : "Failed to start benchmark" },
+      { status: 400 }
+    );
+  }
 }

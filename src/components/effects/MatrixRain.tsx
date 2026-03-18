@@ -32,7 +32,7 @@ export default function MatrixRain({
 
     const fontSize = 14;
     const columns = Math.floor(canvas.width / fontSize);
-    const drops: number[] = new Array(columns).fill(0).map(() => Math.random() * -50);
+    const drops = Array.from({ length: columns }, () => Math.random() * -50);
 
     const colors = ["#F5A623", "#3B82F6", "#A78BFA", "#2DD4BF", "#4ADE80"];
 

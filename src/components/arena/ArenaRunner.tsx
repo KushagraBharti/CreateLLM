@@ -6,11 +6,16 @@ import StageOrbs from "./StageOrbs";
 import ModelStatusGrid from "./ModelStatusGrid";
 
 const stageLabels: Record<string, string> = {
+  queued: "Queued",
   generating: "Generating ideas",
   critiquing: "Critiquing & voting",
+  awaiting_human_critique: "Awaiting your critique",
   revising: "Revising ideas",
   voting: "Final judgment",
   complete: "Complete",
+  partial: "Partial result",
+  canceled: "Canceled",
+  dead_lettered: "Needs retry",
   error: "Error",
 };
 

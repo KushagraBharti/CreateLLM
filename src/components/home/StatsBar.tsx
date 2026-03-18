@@ -1,45 +1,21 @@
-"use client";
-
-import { useEffect, useState } from "react";
 import AnimatedNumber from "@/components/ui/AnimatedNumber";
+import { getHomeStats } from "@/lib/results";
 
-interface Stats {
-  totalRuns: number;
-  totalIdeas: number;
-  totalCritiques: number;
-}
-
-export default function StatsBar() {
-  const [stats, setStats] = useState<Stats>({ totalRuns: 0, totalIdeas: 0, totalCritiques: 0 });
-
-  useEffect(() => {
-    async function load() {
-      try {
-        const res = await fetch("/api/results");
-        if (res.ok) {
-          const runs = await res.json();
-          setStats({
-            totalRuns: runs.length,
-            totalIdeas: runs.length * 4,
-            totalCritiques: runs.length * 12,
-          });
-        }
-      } catch { /* decorative — silent fail */ }
-    }
-    load();
-  }, []);
+export default async function StatsBar() {
+  const stats = await getHomeStats();
 
   const items = [
     { value: stats.totalRuns, label: "Benchmarks" },
     { value: stats.totalIdeas, label: "Ideas Generated" },
     { value: stats.totalCritiques, label: "Critiques Written" },
+    { value: stats.totalModels, label: "Tracked Models" },
   ];
 
   return (
     <section className="py-16 px-6 border-t border-border">
-      <div className="max-w-6xl mx-auto flex items-center justify-between">
+      <div className="max-w-6xl mx-auto grid grid-cols-2 md:grid-cols-4 gap-px bg-border border border-border">
         {items.map((item) => (
-          <div key={item.label} className="text-center flex-1">
+          <div key={item.label} className="text-center bg-bg-deep px-4 py-6">
             <AnimatedNumber
               value={item.value}
               className="font-mono text-3xl sm:text-4xl text-text-primary font-medium"

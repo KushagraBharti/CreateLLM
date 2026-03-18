@@ -3,6 +3,7 @@ import { Instrument_Serif, Figtree, IBM_Plex_Mono } from "next/font/google";
 import "./globals.css";
 import Navbar from "@/components/layout/Navbar";
 import Footer from "@/components/layout/Footer";
+import PageTransition from "@/components/layout/PageTransition";
 import { EasterEggProvider } from "@/components/effects/EasterEggProvider";
 import { Toaster } from "sonner";
 
@@ -29,7 +30,7 @@ const ibmPlexMono = IBM_Plex_Mono({
 export const metadata: Metadata = {
   title: "NovelBench — Where AI Creativity Competes",
   description:
-    "Four AI models compete across eight creative domains. They generate, critique, revise, and vote — revealing which model is the most creative.",
+    "Configurable frontier AI models compete across creative domains. They generate, critique, revise, and vote to reveal which model performs best.",
 };
 
 export default function RootLayout({
@@ -45,7 +46,9 @@ export default function RootLayout({
       <body className="antialiased min-h-screen flex flex-col">
         <EasterEggProvider>
           <Navbar />
-          <main className="flex-1 pt-16">{children}</main>
+          <main className="flex-1 pt-16">
+            <PageTransition>{children}</PageTransition>
+          </main>
           <Footer />
           <Toaster
             theme="dark"

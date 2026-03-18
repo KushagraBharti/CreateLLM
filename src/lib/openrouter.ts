@@ -1,3 +1,5 @@
+import { getOpenRouterCircuitBreaker } from "./circuit-breaker";
+
 const OPENROUTER_API_URL = "https://openrouter.ai/api/v1/chat/completions";
 
 interface StreamDeltaChunk {
@@ -30,30 +32,76 @@ export interface CallModelOptions {
   maxRetries?: number;
   reasoning?: ReasoningConfig;
   timeoutMs?: number;
+  signal?: AbortSignal;
 }
 
-const DEFAULT_TIMEOUT_MS = 90_000; // 90 seconds per model call
+const DEFAULT_TIMEOUT_MS = 90_000;
 
-function withTimeout<T>(
-  promise: Promise<T>,
-  ms: number,
-  label: string
-): Promise<T> {
-  return new Promise<T>((resolve, reject) => {
-    const timer = setTimeout(
-      () => reject(new Error(`Timeout after ${ms}ms: ${label}`)),
-      ms
-    );
-    promise
-      .then((val) => {
-        clearTimeout(timer);
-        resolve(val);
-      })
-      .catch((err) => {
-        clearTimeout(timer);
-        reject(err);
-      });
-  });
+function timeoutSignal(ms: number, signal?: AbortSignal): AbortSignal {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(new Error(`Timeout after ${ms}ms`)), ms);
+
+  signal?.addEventListener(
+    "abort",
+    () => {
+      controller.abort(signal.reason);
+      clearTimeout(timer);
+    },
+    { once: true }
+  );
+
+  controller.signal.addEventListener(
+    "abort",
+    () => clearTimeout(timer),
+    { once: true }
+  );
+
+  return controller.signal;
+}
+
+async function requestOpenRouter(
+  body: Record<string, unknown>,
+  timeoutMs: number,
+  signal?: AbortSignal
+): Promise<Response> {
+  const apiKey = process.env.OPENROUTER_API_KEY;
+  if (!apiKey) {
+    throw new Error("OPENROUTER_API_KEY is not set in environment variables");
+  }
+
+  const breaker = getOpenRouterCircuitBreaker();
+  const gate = breaker.canRequest();
+  if (!gate.ok) {
+    throw new Error("OpenRouter circuit breaker is open");
+  }
+
+  try {
+    const response = await fetch(OPENROUTER_API_URL, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        "Content-Type": "application/json",
+        "HTTP-Referer": "https://novelbench.dev",
+        "X-Title": "NovelBench Creativity Benchmark",
+      },
+      body: JSON.stringify(body),
+      signal: timeoutSignal(timeoutMs, signal),
+    });
+
+    if (!response.ok) {
+      const text = await response.text();
+      breaker.recordFailure(`OpenRouter API error (${response.status})`);
+      throw new Error(`OpenRouter API error (${response.status}): ${text}`);
+    }
+
+    breaker.recordSuccess();
+    return response;
+  } catch (error) {
+    if ((error as Error).name !== "AbortError") {
+      breaker.recordFailure(error instanceof Error ? error.message : String(error));
+    }
+    throw error;
+  }
 }
 
 export async function callModel(
@@ -61,19 +109,12 @@ export async function callModel(
   messages: ChatMessage[],
   options: CallModelOptions = {}
 ): Promise<string> {
-  const { maxRetries = 2, reasoning, timeoutMs = DEFAULT_TIMEOUT_MS } = options;
-
-  const apiKey = process.env.OPENROUTER_API_KEY;
-  if (!apiKey) {
-    throw new Error("OPENROUTER_API_KEY is not set in environment variables");
-  }
-
+  const { maxRetries = 2, reasoning, timeoutMs = DEFAULT_TIMEOUT_MS, signal } = options;
   let lastError: Error | null = null;
 
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
     try {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const body: Record<string, any> = {
+      const body: Record<string, unknown> = {
         model: openRouterId,
         messages,
         max_tokens: 4096,
@@ -84,30 +125,7 @@ export async function callModel(
         body.reasoning = reasoning;
       }
 
-      const fetchPromise = fetch(OPENROUTER_API_URL, {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${apiKey}`,
-          "Content-Type": "application/json",
-          "HTTP-Referer": "https://novelbench.dev",
-          "X-Title": "NovelBench Creativity Benchmark",
-        },
-        body: JSON.stringify(body),
-      });
-
-      const response = await withTimeout(
-        fetchPromise,
-        timeoutMs,
-        `${openRouterId} (attempt ${attempt + 1})`
-      );
-
-      if (!response.ok) {
-        const text = await response.text();
-        throw new Error(
-          `OpenRouter API error (${response.status}): ${text}`
-        );
-      }
-
+      const response = await requestOpenRouter(body, timeoutMs, signal);
       const data: OpenRouterResponse = await response.json();
 
       if (data.error) {
@@ -122,8 +140,9 @@ export async function callModel(
       return content;
     } catch (error) {
       lastError = error instanceof Error ? error : new Error(String(error));
+      if (signal?.aborted) throw lastError;
       if (attempt < maxRetries) {
-        await new Promise((r) => setTimeout(r, 1000 * (attempt + 1)));
+        await new Promise((resolve) => setTimeout(resolve, 1000 * (attempt + 1)));
       }
     }
   }
@@ -131,22 +150,13 @@ export async function callModel(
   throw lastError ?? new Error("Unknown error calling OpenRouter");
 }
 
-/**
- * Streams token chunks from OpenRouter via SSE.
- * Yields each text delta as it arrives. Falls back to throwing on error.
- */
 export async function* streamModel(
   openRouterId: string,
   messages: ChatMessage[],
   options: CallModelOptions = {}
 ): AsyncGenerator<string> {
-  const { reasoning, timeoutMs = DEFAULT_TIMEOUT_MS } = options;
-
-  const apiKey = process.env.OPENROUTER_API_KEY;
-  if (!apiKey) throw new Error("OPENROUTER_API_KEY is not set in environment variables");
-
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const body: Record<string, any> = {
+  const { reasoning, timeoutMs = DEFAULT_TIMEOUT_MS, signal } = options;
+  const body: Record<string, unknown> = {
     model: openRouterId,
     messages,
     max_tokens: 4096,
@@ -156,55 +166,37 @@ export async function* streamModel(
 
   if (reasoning) body.reasoning = reasoning;
 
-  const abort = new AbortController();
-  const timer = setTimeout(() => abort.abort(), timeoutMs);
+  const response = await requestOpenRouter(body, timeoutMs, signal);
+  const reader = response.body?.getReader();
+  if (!reader) throw new Error("No response body");
 
-  try {
-    const response = await fetch(OPENROUTER_API_URL, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-        "Content-Type": "application/json",
-        "HTTP-Referer": "https://novelbench.dev",
-        "X-Title": "NovelBench Creativity Benchmark",
-      },
-      body: JSON.stringify(body),
-      signal: abort.signal,
-    });
+  const decoder = new TextDecoder();
+  let buffer = "";
 
-    if (!response.ok) {
-      const text = await response.text();
-      throw new Error(`OpenRouter API error (${response.status}): ${text}`);
+  while (true) {
+    if (signal?.aborted) {
+      await reader.cancel();
+      throw signal.reason instanceof Error ? signal.reason : new Error("Aborted");
     }
 
-    const reader = response.body?.getReader();
-    if (!reader) throw new Error("No response body");
+    const { done, value } = await reader.read();
+    if (done) break;
 
-    const decoder = new TextDecoder();
-    let buffer = "";
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split("\n");
+    buffer = lines.pop() || "";
 
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-
-      buffer += decoder.decode(value, { stream: true });
-      const lines = buffer.split("\n");
-      buffer = lines.pop() || "";
-
-      for (const line of lines) {
-        if (!line.startsWith("data: ")) continue;
-        const data = line.slice(6).trim();
-        if (data === "[DONE]") return;
-        try {
-          const parsed: StreamDeltaChunk = JSON.parse(data);
-          const chunk = parsed.choices?.[0]?.delta?.content;
-          if (chunk) yield chunk;
-        } catch {
-          // ignore malformed SSE chunks
-        }
+    for (const line of lines) {
+      if (!line.startsWith("data: ")) continue;
+      const data = line.slice(6).trim();
+      if (data === "[DONE]") return;
+      try {
+        const parsed: StreamDeltaChunk = JSON.parse(data);
+        const chunk = parsed.choices?.[0]?.delta?.content;
+        if (chunk) yield chunk;
+      } catch {
+        // Ignore malformed chunks.
       }
     }
-  } finally {
-    clearTimeout(timer);
   }
 }

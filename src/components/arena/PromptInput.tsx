@@ -1,7 +1,6 @@
 "use client";
 
-import { useState, useEffect, useRef } from "react";
-import { motion } from "framer-motion";
+import { useState, useEffect } from "react";
 import { categories } from "@/lib/categories";
 import { clsx } from "clsx";
 

@@ -1,96 +1,85 @@
 "use client";
 
-import { useRef, useState } from "react";
-import { motion, useInView, AnimatePresence } from "framer-motion";
-import { allModelIdentities } from "@/utils/model-identity";
+import { useState } from "react";
+import { motion, AnimatePresence } from "framer-motion";
+import { getModelCatalog } from "@/lib/models";
 
 export default function ContendersGrid() {
-  const ref = useRef(null);
-  const isInView = useInView(ref, { once: true, margin: "-80px" });
-  const [hoveredModel, setHoveredModel] = useState<string | null>(null);
-  const hoverTimerRef = useRef<ReturnType<typeof setTimeout>>(undefined);
-  const [showPersonality, setShowPersonality] = useState<string | null>(null);
-
-  function handleMouseEnter(id: string) {
-    setHoveredModel(id);
-    hoverTimerRef.current = setTimeout(() => setShowPersonality(id), 2000);
-  }
-
-  function handleMouseLeave() {
-    setHoveredModel(null);
-    clearTimeout(hoverTimerRef.current);
-    setShowPersonality(null);
-  }
+  const models = getModelCatalog();
+  const [expanded, setExpanded] = useState<string | null>(models[0]?.id ?? null);
 
   return (
     <section className="py-28 px-6 border-t border-border">
       <div className="max-w-6xl mx-auto">
-        <p className="label mb-4">The Competitors</p>
-        <h2 className="font-display text-3xl sm:text-4xl text-text-primary mb-16">
-          Four contenders
+        <p className="label mb-4">Model Catalog</p>
+        <h2 className="font-display text-3xl sm:text-4xl text-text-primary mb-4">
+          Curated frontier contenders
         </h2>
+        <p className="text-base text-text-muted max-w-3xl mb-12">
+          OpenRouter is the only model access layer. The catalog mixes flagship, reasoning, fast, and mini tiers across leading labs, while still letting you bring your own model IDs.
+        </p>
 
-        <div ref={ref} className="space-y-0 border-t border-border">
-          {allModelIdentities.map((model, i) => (
-            <motion.div
-              key={model.id}
-              initial={{ opacity: 0 }}
-              animate={isInView ? { opacity: 1 } : {}}
-              transition={{ duration: 0.4, delay: i * 0.08 }}
-              onMouseEnter={() => handleMouseEnter(model.id)}
-              onMouseLeave={handleMouseLeave}
-              className="relative border-b border-border py-6 flex items-center justify-between group cursor-default"
-            >
-              <div className="flex items-center gap-6">
-                {/* Monospace initial */}
-                <span
-                  className="font-mono text-base w-8 text-center transition-colors duration-300"
-                  style={{
-                    color: hoveredModel === model.id ? model.color : "var(--color-text-muted)",
-                  }}
-                >
-                  {model.initial}
-                </span>
-
-                {/* Name */}
-                <span className="text-text-primary text-lg font-medium">
-                  {model.name}
-                </span>
-              </div>
-
-              <div className="flex items-center gap-4">
-                {/* Provider */}
-                <span className="text-base text-text-muted hidden sm:block">
-                  {model.provider}
-                </span>
-
-                {/* Color dot */}
-                <span
-                  className="w-2 h-2 rounded-full transition-transform duration-300"
-                  style={{
-                    backgroundColor: model.color,
-                    transform: hoveredModel === model.id ? "scale(1.5)" : "scale(1)",
-                  }}
-                />
-              </div>
-
-              {/* Personality tooltip — 2s hover easter egg */}
-              <AnimatePresence>
-                {showPersonality === model.id && (
-                  <motion.div
-                    initial={{ opacity: 0, y: 4 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    exit={{ opacity: 0 }}
-                    className="absolute -bottom-1 left-14 translate-y-full z-10 bg-bg-elevated border border-border rounded-lg px-4 py-2 max-w-xs"
-                  >
-                    <p className="text-base text-text-secondary italic">
-                      &ldquo;{model.personality}&rdquo;
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          {models.map((model) => {
+            const isExpanded = expanded === model.id;
+            return (
+              <button
+                key={model.id}
+                type="button"
+                onClick={() => setExpanded(isExpanded ? null : model.id)}
+                className="text-left border border-border rounded-2xl bg-bg-surface/70 p-5 hover:bg-bg-elevated/60 transition-colors"
+              >
+                <div className="flex items-start justify-between gap-4">
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <span className="w-2 h-2 rounded-full" style={{ backgroundColor: model.color }} />
+                      <span className="text-text-primary text-lg font-medium">{model.name}</span>
+                    </div>
+                    <p className="text-base text-text-muted mt-1">
+                      {model.lab} · {model.tier}
                     </p>
-                  </motion.div>
-                )}
-              </AnimatePresence>
-            </motion.div>
-          ))}
+                  </div>
+                  <span className="text-sm font-mono text-text-secondary">
+                    {isExpanded ? "Hide" : "Open"}
+                  </span>
+                </div>
+
+                <p className="text-base text-text-secondary mt-4">{model.description}</p>
+
+                <AnimatePresence initial={false}>
+                  {isExpanded && (
+                    <motion.div
+                      initial={{ opacity: 0, height: 0 }}
+                      animate={{ opacity: 1, height: "auto" }}
+                      exit={{ opacity: 0, height: 0 }}
+                      className="overflow-hidden"
+                    >
+                      <div className="pt-4 mt-4 border-t border-border/70 space-y-3">
+                        <p className="text-sm text-text-muted italic">“{model.personality}”</p>
+                        <div className="flex flex-wrap gap-2">
+                          {model.tags.map((tag) => (
+                            <span key={tag} className="text-xs px-2 py-1 rounded-full border border-border text-text-muted">
+                              {tag}
+                            </span>
+                          ))}
+                        </div>
+                        <div className="grid grid-cols-2 gap-3 text-sm">
+                          <div className="rounded-xl border border-border/70 p-3 bg-bg-deep/60">
+                            <p className="label mb-1">Provider</p>
+                            <p className="text-text-secondary">{model.provider}</p>
+                          </div>
+                          <div className="rounded-xl border border-border/70 p-3 bg-bg-deep/60">
+                            <p className="label mb-1">Default</p>
+                            <p className="text-text-secondary">{model.defaultEnabled ? "Enabled" : "Optional"}</p>
+                          </div>
+                        </div>
+                      </div>
+                    </motion.div>
+                  )}
+                </AnimatePresence>
+              </button>
+            );
+          })}
         </div>
       </div>
     </section>
