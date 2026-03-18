@@ -9,11 +9,12 @@ import RankingTable from "./RankingTable";
 
 interface ResultsViewProps {
   run: BenchmarkRun;
+  isLive?: boolean;
 }
 
 type Tab = "ideas" | "critiques" | "rankings" | "revised" | "final";
 
-export default function ResultsView({ run }: ResultsViewProps) {
+export default function ResultsView({ run, isLive }: ResultsViewProps) {
   const [activeTab, setActiveTab] = useState<Tab>("ideas");
 
   // Build critique+vote rankings as Ranking[] for the table
@@ -22,20 +23,28 @@ export default function ResultsView({ run }: ResultsViewProps) {
     rankings: cv.rankings,
   }));
 
-  const tabs: { id: Tab; label: string; count?: number }[] = [
-    { id: "ideas", label: "Initial Ideas", count: run.ideas.length },
-    { id: "critiques", label: "Critiques", count: run.critiqueVotes.length },
-    { id: "rankings", label: "Round 1 Rankings" },
-    { id: "revised", label: "Revised Ideas", count: run.revisedIdeas.length },
-    { id: "final", label: "Final Rankings" },
+  const tabs: { id: Tab; label: string; count?: number; available: boolean }[] = [
+    { id: "ideas", label: "Initial Ideas", count: run.ideas.length, available: run.ideas.length > 0 },
+    { id: "critiques", label: "Critiques", count: run.critiqueVotes.length, available: run.critiqueVotes.length > 0 },
+    { id: "rankings", label: "Round 1 Rankings", available: run.critiqueVotes.length > 0 },
+    { id: "revised", label: "Revised Ideas", count: run.revisedIdeas.length, available: run.revisedIdeas.length > 0 },
+    { id: "final", label: "Final Rankings", available: run.finalRankings.length > 0 },
   ];
 
   return (
     <div>
       <div className="mb-6">
-        <h2 className="text-xl font-bold text-foreground">
-          {run.categoryId}
-        </h2>
+        <div className="flex items-center gap-2">
+          <h2 className="text-xl font-bold text-foreground capitalize">
+            {run.categoryId}
+          </h2>
+          {isLive && (
+            <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-green-100 text-green-700 text-xs font-medium rounded-full">
+              <span className="w-1.5 h-1.5 bg-green-500 rounded-full animate-pulse" />
+              Live
+            </span>
+          )}
+        </div>
         <p className="text-gray-600 mt-1">{run.prompt}</p>
         <p className="text-xs text-gray-400 mt-1">
           {new Date(run.timestamp).toLocaleString()}
@@ -47,12 +56,15 @@ export default function ResultsView({ run }: ResultsViewProps) {
         {tabs.map((tab) => (
           <button
             key={tab.id}
-            onClick={() => setActiveTab(tab.id)}
+            onClick={() => tab.available && setActiveTab(tab.id)}
             className={`px-4 py-2 text-sm font-medium whitespace-nowrap transition-colors ${
               activeTab === tab.id
                 ? "border-b-2 border-blue-600 text-blue-600"
-                : "text-gray-500 hover:text-gray-700"
+                : tab.available
+                ? "text-gray-500 hover:text-gray-700"
+                : "text-gray-300 cursor-not-allowed"
             }`}
+            disabled={!tab.available}
           >
             {tab.label}
             {tab.count !== undefined && (
@@ -78,7 +90,6 @@ export default function ResultsView({ run }: ResultsViewProps) {
         {activeTab === "critiques" && (
           <div className="space-y-6">
             {run.ideas.map((idea) => {
-              // Gather all critiques targeting this model
               const critiquesForIdea: { critique: typeof run.critiqueVotes[0]["critiques"][0]; fromModelId: string }[] = [];
               for (const cv of run.critiqueVotes) {
                 for (const c of cv.critiques) {

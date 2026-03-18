@@ -99,3 +99,17 @@ export interface AggregatedScore {
   averageScore: number;
   critiqueScoreAvg: number;
 }
+
+export interface LeaderboardEntry {
+  modelId: string;
+  modelName: string;
+  wins: number;
+  totalRuns: number;
+  averageScore: number;
+  averageRank: number;
+}
+
+export interface LeaderboardData {
+  global: LeaderboardEntry[];
+  byCategory: Record<string, LeaderboardEntry[]>;
+}

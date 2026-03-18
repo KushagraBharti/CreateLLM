@@ -23,10 +23,16 @@ export default function Home() {
           Run a Benchmark
         </Link>
         <Link
+          href="/leaderboard"
+          className="px-6 py-3 border border-gray-300 hover:bg-gray-50 text-foreground font-medium rounded-lg transition-colors"
+        >
+          Leaderboard
+        </Link>
+        <Link
           href="/results"
           className="px-6 py-3 border border-gray-300 hover:bg-gray-50 text-foreground font-medium rounded-lg transition-colors"
         >
-          View Past Results
+          Past Results
         </Link>
       </div>
 
