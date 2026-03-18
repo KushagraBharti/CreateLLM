@@ -37,6 +37,11 @@ const MODEL_TIMEOUT_MS = 90_000;
 const JSON_RETRY_MESSAGE =
   "Your response was not valid JSON. Please respond with ONLY valid JSON in the exact format specified above. No markdown, no explanation - just the JSON object.";
 
+interface JsonRetryOptions {
+  retryOnInvalidJson?: boolean;
+  acceptPartialResponse?: boolean;
+}
+
 export interface BenchmarkRuntimeControls {
   createAbortController: (key: string) => AbortController;
   releaseAbortController: (key: string) => void;
@@ -231,15 +236,17 @@ async function callModelWithJsonRetry(
   messages: ChatMessage[],
   reasoning: ReasoningConfig,
   validateFn: (raw: string) => boolean,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  options: JsonRetryOptions = {}
 ): Promise<string> {
+  const { retryOnInvalidJson = true } = options;
   const raw = await callModel(openRouterId, messages, {
     reasoning,
     timeoutMs: MODEL_TIMEOUT_MS,
     signal,
   });
 
-  if (validateFn(raw)) return raw;
+  if (validateFn(raw) || !retryOnInvalidJson) return raw;
 
   return callModel(
     openRouterId,
@@ -262,8 +269,10 @@ async function streamModelAndCollect(
   reasoning: ReasoningConfig,
   validateFn: (raw: string) => boolean,
   signal?: AbortSignal,
-  onChunk?: (chunk: string) => void
+  onChunk?: (chunk: string) => void,
+  options: JsonRetryOptions = {}
 ): Promise<string> {
+  const { acceptPartialResponse = false, retryOnInvalidJson = true } = options;
   let accumulated = "";
 
   try {
@@ -276,10 +285,19 @@ async function streamModelAndCollect(
       onChunk?.(chunk);
     }
   } catch {
-    return callModelWithJsonRetry(openRouterId, messages, reasoning, validateFn, signal);
+    if (acceptPartialResponse && accumulated.trim().length > 0) {
+      return accumulated;
+    }
+    return callModelWithJsonRetry(openRouterId, messages, reasoning, validateFn, signal, {
+      retryOnInvalidJson,
+    });
   }
 
   if (validateFn(accumulated)) return accumulated;
+  if (acceptPartialResponse && accumulated.trim().length > 0) {
+    return accumulated;
+  }
+  if (!retryOnInvalidJson) return accumulated;
 
   return callModel(
     openRouterId,
@@ -418,7 +436,8 @@ async function runGenerateStage(
         REASONING_GENERATE,
         isValidIdeaJson,
         abortController.signal,
-        (chunk) => getRunEventBus().publishToken(current.id, model.id, "generate", chunk)
+        (chunk) => getRunEventBus().publishToken(current.id, model.id, "generate", chunk),
+        { acceptPartialResponse: true, retryOnInvalidJson: false }
       );
       const idea: Idea = {
         modelId: model.id,
@@ -658,7 +677,8 @@ async function runRevisionStage(
         REASONING_REVISE,
         isValidIdeaJson,
         abortController.signal,
-        (chunk) => getRunEventBus().publishToken(current.id, idea.modelId, "revise", chunk)
+        (chunk) => getRunEventBus().publishToken(current.id, idea.modelId, "revise", chunk),
+        { acceptPartialResponse: true, retryOnInvalidJson: false }
       );
       return {
         modelId: idea.modelId,

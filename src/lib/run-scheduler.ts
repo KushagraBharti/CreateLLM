@@ -3,6 +3,8 @@ import { getBenchmarkRepository, loadBenchmarkRun, updateBenchmarkRun } from "./
 import { getRunEventBus } from "./run-events";
 import { BenchmarkRun, CreateBenchmarkRunInput, HumanCritiqueEntry } from "@/types";
 
+const AUTO_RESUME_WINDOW_MS = 15 * 60 * 1000;
+
 class RunScheduler {
   private queue: string[] = [];
   private running = new Set<string>();
@@ -28,6 +30,23 @@ class RunScheduler {
       if (run.status === "error" || run.status === "dead_lettered" || run.status === "partial") {
         continue;
       }
+
+      if (this.isStaleForAutoResume(run)) {
+        await updateBenchmarkRun(run.id, (current) => ({
+          ...current,
+          status:
+            current.ideas.length > 0 ||
+            current.critiqueVotes.length > 0 ||
+            current.revisedIdeas.length > 0 ||
+            current.finalRankings.length > 0
+              ? "partial"
+              : "canceled",
+          currentStep: "Recovered stale run; not auto-resumed",
+          error: current.error ?? "This run was left in a non-terminal state and was not auto-resumed.",
+        }));
+        continue;
+      }
+
       this.enqueue(run.id);
     }
   }
@@ -158,6 +177,12 @@ class RunScheduler {
     if (controllers && controllers.size === 0) {
       this.abortControllers.delete(runId);
     }
+  }
+
+  private isStaleForAutoResume(run: BenchmarkRun): boolean {
+    const updatedAt = Date.parse(run.updatedAt);
+    if (Number.isNaN(updatedAt)) return true;
+    return Date.now() - updatedAt > AUTO_RESUME_WINDOW_MS;
   }
 }
 
