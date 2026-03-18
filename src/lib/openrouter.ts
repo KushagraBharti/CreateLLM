@@ -1,8 +1,13 @@
 const OPENROUTER_API_URL = "https://openrouter.ai/api/v1/chat/completions";
 
-interface ChatMessage {
+export interface ChatMessage {
   role: "system" | "user" | "assistant";
   content: string;
+}
+
+export interface ReasoningConfig {
+  effort?: "none" | "minimal" | "low" | "medium" | "high" | "xhigh";
+  exclude?: boolean;
 }
 
 interface OpenRouterResponse {
@@ -17,11 +22,43 @@ interface OpenRouterResponse {
   };
 }
 
+export interface CallModelOptions {
+  maxRetries?: number;
+  reasoning?: ReasoningConfig;
+  timeoutMs?: number;
+}
+
+const DEFAULT_TIMEOUT_MS = 90_000; // 90 seconds per model call
+
+function withTimeout<T>(
+  promise: Promise<T>,
+  ms: number,
+  label: string
+): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(
+      () => reject(new Error(`Timeout after ${ms}ms: ${label}`)),
+      ms
+    );
+    promise
+      .then((val) => {
+        clearTimeout(timer);
+        resolve(val);
+      })
+      .catch((err) => {
+        clearTimeout(timer);
+        reject(err);
+      });
+  });
+}
+
 export async function callModel(
   openRouterId: string,
   messages: ChatMessage[],
-  maxRetries = 2
+  options: CallModelOptions = {}
 ): Promise<string> {
+  const { maxRetries = 2, reasoning, timeoutMs = DEFAULT_TIMEOUT_MS } = options;
+
   const apiKey = process.env.OPENROUTER_API_KEY;
   if (!apiKey) {
     throw new Error("OPENROUTER_API_KEY is not set in environment variables");
@@ -31,21 +68,34 @@ export async function callModel(
 
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
     try {
-      const response = await fetch(OPENROUTER_API_URL, {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const body: Record<string, any> = {
+        model: openRouterId,
+        messages,
+        max_tokens: 4096,
+        temperature: 0.8,
+      };
+
+      if (reasoning) {
+        body.reasoning = reasoning;
+      }
+
+      const fetchPromise = fetch(OPENROUTER_API_URL, {
         method: "POST",
         headers: {
           Authorization: `Bearer ${apiKey}`,
           "Content-Type": "application/json",
-          "HTTP-Referer": "https://createllm.dev",
-          "X-Title": "CreateLLM Creativity Benchmark",
+          "HTTP-Referer": "https://novelbench.dev",
+          "X-Title": "NovelBench Creativity Benchmark",
         },
-        body: JSON.stringify({
-          model: openRouterId,
-          messages,
-          max_tokens: 4096,
-          temperature: 0.8,
-        }),
+        body: JSON.stringify(body),
       });
+
+      const response = await withTimeout(
+        fetchPromise,
+        timeoutMs,
+        `${openRouterId} (attempt ${attempt + 1})`
+      );
 
       if (!response.ok) {
         const text = await response.text();

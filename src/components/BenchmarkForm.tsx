@@ -24,8 +24,10 @@ export default function BenchmarkForm({
     }
   }
 
-  function useExample(example: string) {
+  function handleQuickRun(example: string) {
+    if (disabled) return;
     setPrompt(example);
+    onSubmit(categoryId, example);
   }
 
   return (
@@ -77,17 +79,17 @@ export default function BenchmarkForm({
 
       {selectedCategory && selectedCategory.examplePrompts.length > 0 && (
         <div>
-          <p className="text-sm text-gray-500 mb-2">Try an example:</p>
-          <div className="flex flex-wrap gap-2">
+          <p className="text-sm text-gray-500 mb-2">Quick run with an example:</p>
+          <div className="space-y-2">
             {selectedCategory.examplePrompts.map((example, i) => (
               <button
                 key={i}
                 type="button"
-                onClick={() => useExample(example)}
+                onClick={() => handleQuickRun(example)}
                 disabled={disabled}
-                className="text-xs px-3 py-1.5 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-full transition-colors disabled:opacity-50"
+                className="w-full text-left text-sm px-3 py-2 bg-gray-50 hover:bg-blue-50 hover:border-blue-300 text-gray-700 rounded-lg border border-gray-200 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
               >
-                {example.length > 50 ? example.slice(0, 50) + "..." : example}
+                {example}
               </button>
             ))}
           </div>

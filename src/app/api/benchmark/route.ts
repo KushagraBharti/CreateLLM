@@ -1,6 +1,9 @@
 import { NextRequest } from "next/server";
 import { runBenchmark } from "@/lib/engine";
 
+// Allow up to 5 minutes for the full benchmark (4 stages, multiple model calls)
+export const maxDuration = 300;
+
 export async function POST(request: NextRequest) {
   const { categoryId, prompt } = await request.json();
 

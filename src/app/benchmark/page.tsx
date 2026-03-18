@@ -75,6 +75,13 @@ export default function BenchmarkPage() {
     []
   );
 
+  const hasPartialResults = result && (
+    result.ideas.length > 0 ||
+    result.critiqueVotes.length > 0 ||
+    result.revisedIdeas.length > 0 ||
+    result.finalRankings.length > 0
+  );
+
   return (
     <div className="min-h-screen p-8 max-w-5xl mx-auto">
       <div className="flex items-center justify-between mb-8">
@@ -89,12 +96,20 @@ export default function BenchmarkPage() {
             Run Benchmark
           </h1>
         </div>
-        <Link
-          href="/results"
-          className="text-sm text-blue-600 hover:text-blue-700"
-        >
-          View Past Results
-        </Link>
+        <div className="flex gap-3">
+          <Link
+            href="/leaderboard"
+            className="text-sm text-blue-600 hover:text-blue-700"
+          >
+            Leaderboard
+          </Link>
+          <Link
+            href="/results"
+            className="text-sm text-blue-600 hover:text-blue-700"
+          >
+            Past Results
+          </Link>
+        </div>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
@@ -112,9 +127,10 @@ export default function BenchmarkPage() {
         <div className="lg:col-span-2">
           {status && <BenchmarkRunner status={status} step={step} />}
 
-          {result && status === "complete" && (
+          {/* Show partial results while running, or full results when complete */}
+          {hasPartialResults && (
             <div className="mt-6">
-              <ResultsView run={result} />
+              <ResultsView run={result} isLive={isRunning} />
             </div>
           )}
 
