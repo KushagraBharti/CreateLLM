@@ -23,7 +23,7 @@ import { DEFAULT_WEB_SEARCH_CONFIG } from "./web-search";
 
 const DATA_DIR = path.join(process.cwd(), "data");
 const RUNS_DIR = path.join(DATA_DIR, "runs");
-const LEGACY_DATA_DIR = DATA_DIR;
+const LEGACY_DATA_DIR = path.join(DATA_DIR, "_legacy");
 
 export interface BenchmarkRepository {
   createRun(input: CreateBenchmarkRunInput): Promise<BenchmarkRun>;
