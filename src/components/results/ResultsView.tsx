@@ -109,6 +109,7 @@ export default function ResultsView({
           key: string;
           toolName: string;
           state: "started" | "completed" | "failed";
+          turn?: number;
           query?: string;
           urls?: string[];
           resultCount?: number;
@@ -118,14 +119,15 @@ export default function ResultsView({
 
       for (const call of run.web.toolCalls) {
         if (call.modelId !== modelId || call.stage !== stage) continue;
-        merged.set(call.id, {
-          key: call.id,
-          toolName: call.toolName,
-          state: call.error ? "failed" : call.completedAt ? "completed" : "started",
-          query: call.args.query,
-          urls: call.resultPayload?.results.map((result) => result.url) ?? call.resultSummary?.urls,
-          resultCount: call.resultSummary?.resultCount,
-          error: call.error,
+          merged.set(call.id, {
+            key: call.id,
+            toolName: call.toolName,
+            state: call.error ? "failed" : call.completedAt ? "completed" : "started",
+            turn: call.turn,
+            query: call.args.query,
+            urls: call.resultPayload?.results.map((result) => result.url) ?? call.resultSummary?.urls,
+            resultCount: call.resultSummary?.resultCount,
+            error: call.error,
         });
       }
 
@@ -133,18 +135,22 @@ export default function ResultsView({
         if (entry.modelId !== modelId || entry.stage !== stage) continue;
         const existing = merged.get(entry.callId);
         merged.set(entry.callId, {
-          key: entry.callId,
-          toolName: entry.toolName,
-          state: entry.state,
-          query: entry.query ?? existing?.query,
-          urls: entry.urls ?? existing?.urls,
-          resultCount: entry.resultCount ?? existing?.resultCount,
-          error: entry.error ?? existing?.error,
-        });
-      }
+            key: entry.callId,
+            toolName: entry.toolName,
+            state: entry.state,
+            turn: entry.turn ?? existing?.turn,
+            query: entry.query ?? existing?.query,
+            urls: entry.urls ?? existing?.urls,
+            resultCount: entry.resultCount ?? existing?.resultCount,
+            error: entry.error ?? existing?.error,
+          });
+        }
 
-      return Array.from(merged.values()).sort((a, b) => a.key.localeCompare(b.key));
-    };
+        return Array.from(merged.values()).sort((a, b) => {
+          if ((a.turn ?? 0) !== (b.turn ?? 0)) return (a.turn ?? 0) - (b.turn ?? 0);
+          return a.key.localeCompare(b.key);
+        });
+      };
   }, [liveSearchEntries, run.web.toolCalls]);
 
   const getStreamingReasoningEntries = useMemo(() => {
@@ -153,6 +159,7 @@ export default function ResultsView({
         string,
         {
           key: string;
+          turn?: number;
           detailType: "reasoning.summary" | "reasoning.encrypted" | "reasoning.text";
           text?: string;
           summary?: string;
@@ -164,11 +171,12 @@ export default function ResultsView({
 
       for (const detail of run.reasoning.details) {
         if (detail.modelId !== modelId || detail.stage !== stage) continue;
-        merged.set(detail.id, {
-          key: detail.id,
-          detailType: detail.type,
-          text: detail.text,
-          summary: detail.summary,
+          merged.set(detail.id, {
+            key: detail.id,
+            turn: detail.turn,
+            detailType: detail.type,
+            text: detail.text,
+            summary: detail.summary,
           data: detail.data,
           format: detail.format,
           index: detail.index,
@@ -178,21 +186,25 @@ export default function ResultsView({
       for (const detail of liveReasoningEntries) {
         if (detail.modelId !== modelId || detail.stage !== stage) continue;
         const existing = merged.get(detail.detailId);
-        merged.set(detail.detailId, {
-          key: detail.detailId,
-          detailType: detail.detailType,
-          text: detail.text ?? existing?.text,
-          summary: detail.summary ?? existing?.summary,
+          merged.set(detail.detailId, {
+            key: detail.detailId,
+            turn: detail.turn ?? existing?.turn,
+            detailType: detail.detailType,
+            text: detail.text ?? existing?.text,
+            summary: detail.summary ?? existing?.summary,
           data: detail.data ?? existing?.data,
           format: detail.format ?? existing?.format,
           index: detail.index ?? existing?.index,
         });
       }
 
-      return Array.from(merged.values()).sort((a, b) => {
-        if (a.index !== undefined && b.index !== undefined && a.index !== b.index) {
-          return a.index - b.index;
-        }
+        return Array.from(merged.values()).sort((a, b) => {
+          if ((a.turn ?? 0) !== (b.turn ?? 0)) {
+            return (a.turn ?? 0) - (b.turn ?? 0);
+          }
+          if (a.index !== undefined && b.index !== undefined && a.index !== b.index) {
+            return a.index - b.index;
+          }
         return a.key.localeCompare(b.key);
       });
     };

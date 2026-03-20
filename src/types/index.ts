@@ -160,6 +160,7 @@ export interface ReasoningDetailRecord {
   id: string;
   stage: RunCheckpointStage;
   modelId: string;
+  turn?: number;
   type: "reasoning.summary" | "reasoning.encrypted" | "reasoning.text";
   format?: string;
   index?: number;

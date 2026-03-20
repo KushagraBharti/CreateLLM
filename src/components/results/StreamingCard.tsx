@@ -10,6 +10,7 @@ interface StreamingCardProps {
   stage: "generate" | "revise";
   reasoningEntries?: Array<{
     key: string;
+    turn?: number;
     detailType: "reasoning.summary" | "reasoning.encrypted" | "reasoning.text";
     text?: string;
     summary?: string;
@@ -18,6 +19,7 @@ interface StreamingCardProps {
   }>;
   toolEntries?: Array<{
     key: string;
+    turn?: number;
     toolName: string;
     state: "started" | "completed" | "failed";
     query?: string;
@@ -31,6 +33,7 @@ type ActivityEntry =
   | {
       kind: "reasoning";
       key: string;
+      turn: number;
       title: string;
       meta: string;
       accent: string;
@@ -39,6 +42,7 @@ type ActivityEntry =
   | {
       kind: "tool";
       key: string;
+      turn: number;
       title: string;
       meta: string;
       accent: string;
@@ -66,6 +70,7 @@ export default function StreamingCard({
       return {
         kind: "reasoning" as const,
         key: entry.key,
+        turn: entry.turn ?? 0,
         title:
           entry.detailType === "reasoning.summary"
             ? "Reasoning summary streamed"
@@ -83,10 +88,11 @@ export default function StreamingCard({
       };
     });
 
-    const tools = toolEntries.map((entry) => ({
-      kind: "tool" as const,
-      key: entry.key,
-      title: entry.state === "failed" ? `${entry.toolName} tool failed` : `${entry.toolName} tool called`,
+      const tools = toolEntries.map((entry) => ({
+        kind: "tool" as const,
+        key: entry.key,
+        turn: entry.turn ?? 0,
+        title: entry.state === "failed" ? `${entry.toolName} tool failed` : `${entry.toolName} tool called`,
       meta: entry.state,
       accent: entry.state === "failed" ? "#C75050" : "var(--color-accent)",
       query: entry.query,
@@ -100,7 +106,11 @@ export default function StreamingCard({
       error: entry.error,
     }));
 
-    return [...reasoning, ...tools];
+    return [...reasoning, ...tools].sort((a, b) => {
+      if (a.turn !== b.turn) return a.turn - b.turn;
+      if (a.kind !== b.kind) return a.kind === "reasoning" ? -1 : 1;
+      return a.key.localeCompare(b.key);
+    });
   }, [reasoningEntries, toolEntries]);
 
   const hasReasoningActivity = activityEntries.some((entry) => entry.kind === "reasoning");

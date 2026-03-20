@@ -9,6 +9,7 @@ export interface LiveToolActivity {
   toolName: "search_web";
   state: "started" | "completed" | "failed";
   callId: string;
+  turn?: number;
   query?: string;
   resultCount?: number;
   urls?: string[];
@@ -19,6 +20,7 @@ export interface LiveReasoningActivity {
   modelId: string;
   stage: "generate" | "revise";
   detailId: string;
+  turn?: number;
   detailType: "reasoning.summary" | "reasoning.encrypted" | "reasoning.text";
   format?: string;
   index?: number;
@@ -107,6 +109,7 @@ export function useBenchmarkSSE() {
                   modelId: event.modelId,
                   stage: event.stage,
                   detailId: event.detailId,
+                  turn: event.turn ?? existing?.turn,
                   detailType: event.detailType,
                   format: event.format ?? existing?.format,
                   index: event.index ?? existing?.index,

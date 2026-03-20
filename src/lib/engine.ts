@@ -205,18 +205,21 @@ function upsertReasoningDetails(
   existing: ReasoningDetailRecord[],
   stage: RunCheckpointStage,
   modelId: string,
-  details: ReasoningDetail[]
+  details: ReasoningDetail[],
+  turn: number
 ): ReasoningDetailRecord[] {
   const next = new Map(existing.map((detail) => [detail.id, detail]));
   const updatedAt = new Date().toISOString();
 
   for (const detail of details) {
-    const id = detail.id ?? `${stage}:${modelId}:${detail.type}:${detail.index ?? 0}`;
+    const scopedDetailId = detail.id ?? `${detail.type}:${detail.format ?? "unknown"}:${detail.index ?? 0}`;
+    const id = `${stage}:${modelId}:turn-${turn}:${scopedDetailId}`;
     const prior = next.get(id);
     next.set(id, {
       id,
       stage,
       modelId,
+      turn,
       type: detail.type,
       format: detail.format ?? prior?.format,
       index: detail.index ?? prior?.index,
@@ -544,6 +547,7 @@ async function executeSearchToolCall(
     toolName: "search_web",
     state: "started",
     callId: params.toolCall.id,
+    turn: params.turn,
     query: args.query,
   });
 
@@ -593,6 +597,7 @@ async function executeSearchToolCall(
       toolName: "search_web",
       state: "completed",
       callId: params.toolCall.id,
+      turn: params.turn,
       query: payload.query,
       resultCount: payload.results.length,
       urls: payload.results.map((result) => result.url),
@@ -635,6 +640,7 @@ async function executeSearchToolCall(
       toolName: "search_web",
       state: "failed",
       callId: params.toolCall.id,
+      turn: params.turn,
       query: args.query,
       error: message,
     });
@@ -660,19 +666,21 @@ async function runToolEnabledIdeaStage(
   const timeoutMs = MODEL_TIMEOUT_MS;
   let trace = createStageToolTrace(params.stage, params.modelId);
   let stopReason: string | null = null;
+  let currentTurnIndex = 0;
   const pushReasoningDetails = (details: ReasoningDetail[]) => {
-    trace = {
-      ...trace,
-      reasoningDetails: upsertReasoningDetails(trace.reasoningDetails, params.stage, params.modelId, details),
-    };
-    for (const detail of details) {
-      getRunEventBus().publishReasoningActivity(current.id, {
-        modelId: params.modelId,
-        stage: params.stage,
-        detailId: detail.id ?? `${params.stage}:${params.modelId}:${detail.type}:${detail.index ?? 0}`,
-        detailType: detail.type,
-        format: detail.format,
-        index: detail.index,
+      trace = {
+        ...trace,
+        reasoningDetails: upsertReasoningDetails(trace.reasoningDetails, params.stage, params.modelId, details, currentTurnIndex),
+      };
+      for (const detail of details) {
+        getRunEventBus().publishReasoningActivity(current.id, {
+          modelId: params.modelId,
+          stage: params.stage,
+          detailId: `${params.stage}:${params.modelId}:turn-${currentTurnIndex}:${detail.id ?? `${detail.type}:${detail.format ?? "unknown"}:${detail.index ?? 0}`}`,
+          turn: currentTurnIndex,
+          detailType: detail.type,
+          format: detail.format,
+          index: detail.index,
         text: detail.text,
         summary: detail.summary,
       });
@@ -712,6 +720,7 @@ async function runToolEnabledIdeaStage(
 
   for (let turn = 0; turn < config.maxLoopTurns; turn++) {
     try {
+      currentTurnIndex = turn;
       const turnResult = await streamModelTurn(params.openRouterId, messages, {
         reasoning: params.reasoning,
         timeoutMs,

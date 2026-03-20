@@ -62,6 +62,7 @@ export const benchmarkPromptCopy = {
     instructions: [
       "Carefully consider all feedback. Read through and understand it well. Then revise your original idea to make it significantly better based on the feedback. Address the weaknesses identified and incorporate the best suggestions.",
       "Some critiques may underweight or question timely claims because the judges may not have had access to the same live web context you had. Preserve or sharpen those claims when they materially strengthen the idea, but keep them specific, plausible, and strategically relevant.",
+      "Some critiques may be incorrect or misleading. Do not blindly follow them. Use your judgment to decide which critiques are valid and which are not. You may also disagree with some criques, so feel free to ignore them, and trust your own judgment.",
       "Here's the original instructions you were given:",
       "Be as novel, original, thorough, and ensure correctness. Think outside the box and propose truly unique ideas.",
       "Be specific, detailed, and explain your idea extremely well.",

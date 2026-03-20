@@ -9,6 +9,7 @@ export type ToolActivityEvent =
         toolName: "search_web";
         state: "started" | "completed" | "failed";
         callId: string;
+        turn?: number;
         query?: string;
         resultCount?: number;
         urls?: string[];
@@ -23,6 +24,7 @@ export type ReasoningActivityEvent =
         modelId: string;
         stage: "generate" | "revise";
         detailId: string;
+        turn?: number;
         detailType: "reasoning.summary" | "reasoning.encrypted" | "reasoning.text";
         format?: string;
         index?: number;
