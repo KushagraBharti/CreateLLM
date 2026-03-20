@@ -48,6 +48,10 @@ interface StartBenchmarkPayload {
   customModelIds: string[];
 }
 
+function isLiveConnectableStatus(status: BenchmarkStatus) {
+  return status !== "complete" && status !== "canceled";
+}
+
 export function useBenchmarkSSE() {
   const [state, setState] = useState<SSEState>({
     runId: null,
@@ -125,7 +129,7 @@ export function useBenchmarkSSE() {
 
         setState((prev) => {
           const nextStatus = event.status as BenchmarkStatus;
-          const isTerminal = ["complete", "partial", "canceled", "dead_lettered", "error"].includes(nextStatus);
+          const isTerminal = !isLiveConnectableStatus(nextStatus);
           if (isTerminal) {
             closeSource();
           }
@@ -133,7 +137,7 @@ export function useBenchmarkSSE() {
           return {
             ...prev,
             runId,
-            isRunning: !isTerminal && nextStatus !== "awaiting_human_critique",
+            isRunning: ["queued", "generating", "critiquing", "revising", "voting"].includes(nextStatus),
             status: nextStatus,
             step: event.step || "",
             result: event.run ?? prev.result,
@@ -195,8 +199,34 @@ export function useBenchmarkSSE() {
 
       const payload = await response.json();
       connectToRun(payload.id);
-      setState((prev) => ({ ...prev, runId: payload.id }));
+      setState((prev) => ({
+        ...prev,
+        runId: payload.id,
+        result: payload,
+        status: payload.status ?? prev.status,
+        step: payload.currentStep ?? prev.step,
+      }));
       return payload.id as string;
+    },
+    [closeSource, connectToRun]
+  );
+
+  const attachToRun = useCallback(
+    (run: BenchmarkRun) => {
+      setState((prev) => ({
+        ...prev,
+        runId: run.id,
+        result: run,
+        status: run.status,
+        step: run.currentStep,
+        error: run.status === "error" ? run.error ?? run.currentStep : null,
+        isRunning: ["queued", "generating", "critiquing", "revising", "voting"].includes(run.status),
+      }));
+      if (isLiveConnectableStatus(run.status)) {
+        connectToRun(run.id);
+      } else {
+        closeSource();
+      }
     },
     [closeSource, connectToRun]
   );
@@ -214,7 +244,37 @@ export function useBenchmarkSSE() {
         throw new Error(payload.error ?? `HTTP ${response.status}`);
       }
       const payload = await response.json();
-      if (["retry", "resume", "proceed"].includes(path)) {
+      const nextRunId = payload?.id ?? state.runId;
+      if (payload?.status && isLiveConnectableStatus(payload.status)) {
+        connectToRun(nextRunId);
+      }
+      setState((prev) => ({
+        ...prev,
+        result: payload ?? prev.result,
+        runId: nextRunId,
+        status: payload?.status ?? prev.status,
+        step: payload?.currentStep ?? prev.step,
+        isRunning: payload?.status ? ["queued", "generating", "critiquing", "revising", "voting"].includes(payload.status) : prev.isRunning,
+      }));
+      return payload;
+    },
+    [connectToRun, state.runId]
+  );
+
+  const performModelAction = useCallback(
+    async (modelId: string, action: "pause" | "resume" | "retry" | "cancel", body?: unknown) => {
+      if (!state.runId) return null;
+      const response = await fetch(`/api/benchmark/${state.runId}/models/${modelId}/${action}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: body ? JSON.stringify(body) : undefined,
+      });
+      if (!response.ok) {
+        const payload = await response.json().catch(() => ({}));
+        throw new Error(payload.error ?? `HTTP ${response.status}`);
+      }
+      const payload = await response.json();
+      if (payload?.status && isLiveConnectableStatus(payload.status)) {
         connectToRun(state.runId);
       }
       setState((prev) => ({
@@ -222,10 +282,7 @@ export function useBenchmarkSSE() {
         result: payload ?? prev.result,
         status: payload?.status ?? prev.status,
         step: payload?.currentStep ?? prev.step,
-        isRunning:
-          payload?.status && !["complete", "partial", "canceled", "dead_lettered", "error", "awaiting_human_critique"].includes(payload.status)
-            ? true
-            : prev.isRunning,
+        isRunning: payload?.status ? ["queued", "generating", "critiquing", "revising", "voting"].includes(payload.status) : prev.isRunning,
       }));
       return payload;
     },
@@ -251,12 +308,19 @@ export function useBenchmarkSSE() {
     () => ({
       ...state,
       startBenchmark,
+      attachToRun,
       connectToRun,
       reset,
+      pauseBenchmark: () => performAction("pause"),
       cancelBenchmark: () => performAction("cancel"),
       proceedBenchmark: () => performAction("proceed"),
       resumeBenchmark: () => performAction("resume"),
+      restartBenchmark: () => performAction("restart"),
       retryBenchmark: () => performAction("retry"),
+      pauseModel: (modelId: string) => performModelAction(modelId, "pause"),
+      resumeModel: (modelId: string) => performModelAction(modelId, "resume"),
+      retryModel: (modelId: string) => performModelAction(modelId, "retry"),
+      cancelModel: (modelId: string) => performModelAction(modelId, "cancel"),
       submitHumanCritiques: (critiques: unknown[]) => performAction("human-critiques", { critiques }),
       hasResults:
         state.result !== null &&
@@ -269,6 +333,6 @@ export function useBenchmarkSSE() {
           Object.keys(state.toolActivity).length > 0 ||
           Object.keys(state.reasoningActivity).length > 0),
     }),
-    [connectToRun, performAction, reset, startBenchmark, state]
+    [attachToRun, connectToRun, performAction, performModelAction, reset, startBenchmark, state]
   );
 }

@@ -1,7 +1,7 @@
 "use client";
 
 import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useSearchParams } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { motion, AnimatePresence } from "framer-motion";
 import { categories } from "@/lib/categories";
 import { getDefaultModels } from "@/lib/models";
@@ -24,6 +24,7 @@ export default function ArenaPage() {
 }
 
 function ArenaContent() {
+  const router = useRouter();
   const searchParams = useSearchParams();
   const initialCategory = searchParams.get("category") || categories[0].id;
   const [categoryId, setCategoryId] = useState(initialCategory);
@@ -36,6 +37,7 @@ function ArenaContent() {
   const prevStatusRef = useRef<string | null>(null);
 
   const {
+    runId,
     isRunning,
     status,
     step,
@@ -43,8 +45,15 @@ function ArenaContent() {
     error,
     hasResults,
     startBenchmark,
+    pauseBenchmark,
     cancelBenchmark,
     proceedBenchmark,
+    resumeBenchmark,
+    restartBenchmark,
+    pauseModel,
+    resumeModel,
+    retryModel,
+    cancelModel,
     submitHumanCritiques,
     streamingText,
     toolActivity,
@@ -58,6 +67,12 @@ function ArenaContent() {
     prevStatusRef.current = status;
   }, [status, result]);
 
+  useEffect(() => {
+    if (runId) {
+      router.replace(`/arena/${runId}`);
+    }
+  }, [router, runId]);
+
   const totalSelectedModels = selectedModelIds.length + customModelIds.length;
   const canStart = prompt.trim().length > 0 && totalSelectedModels >= 2 && totalSelectedModels <= 8 && !isRunning;
 
@@ -65,39 +80,46 @@ function ArenaContent() {
     async (event: React.FormEvent) => {
       event.preventDefault();
       if (!canStart) return;
-      await startBenchmark({
+      const runId = await startBenchmark({
         categoryId,
         prompt: prompt.trim(),
         selectedModelIds,
         customModelIds,
       });
+      if (runId) {
+        router.push(`/arena/${runId}`);
+      }
     },
-    [canStart, categoryId, customModelIds, prompt, selectedModelIds, startBenchmark]
+    [canStart, categoryId, customModelIds, prompt, router, selectedModelIds, startBenchmark]
   );
 
   const handleQuickRun = useCallback(
     async (examplePrompt: string) => {
       if (isRunning) return;
       setPrompt(examplePrompt);
-      await startBenchmark({
+      const runId = await startBenchmark({
         categoryId,
         prompt: examplePrompt,
         selectedModelIds,
         customModelIds,
       });
+      if (runId) {
+        router.push(`/arena/${runId}`);
+      }
     },
-    [categoryId, customModelIds, isRunning, selectedModelIds, startBenchmark]
+    [categoryId, customModelIds, isRunning, router, selectedModelIds, startBenchmark]
   );
 
   const selectionState = useMemo(
     () => ({ selectedModelIds, customModelIds }),
     [customModelIds, selectedModelIds]
   );
+  const showRunWorkspace = Boolean(status && status !== "complete" && status !== "canceled");
 
   return (
     <div className="max-w-7xl mx-auto px-6 py-8">
       <AnimatePresence mode="wait">
-        {!isRunning ? (
+        {!showRunWorkspace ? (
           <motion.div key="form" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
             <form onSubmit={handleSubmit}>
               <div className="relative border border-border rounded-xl overflow-hidden">
@@ -148,9 +170,16 @@ function ArenaContent() {
               <p className="text-base text-text-primary capitalize">{categoryId}</p>
               <p className="text-sm text-text-muted line-clamp-2 mt-1">{prompt}</p>
             </div>
-            <Button type="button" variant="ghost" onClick={() => void cancelBenchmark()}>
-              Cancel
-            </Button>
+            <div className="flex items-center gap-3">
+              {["queued", "generating", "critiquing", "revising", "voting"].includes(status ?? "") && (
+                <Button type="button" variant="ghost" onClick={() => void pauseBenchmark()}>
+                  Pause
+                </Button>
+              )}
+              <Button type="button" variant="ghost" onClick={() => void cancelBenchmark()}>
+                Cancel
+              </Button>
+            </div>
           </motion.div>
         )}
       </AnimatePresence>
@@ -159,10 +188,6 @@ function ArenaContent() {
         <AnimatePresence mode="wait">
           {status ? (
             <motion.div key="arena" initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} className="space-y-8">
-              {(isRunning || status === "queued" || status === "awaiting_human_critique") && (
-                <ArenaRunner status={status} step={step} run={result} />
-              )}
-
               {status === "awaiting_human_critique" && result && (
                 <HumanCritiquePanel
                   run={result}
@@ -172,6 +197,27 @@ function ArenaContent() {
                   onProceed={async () => {
                     await proceedBenchmark();
                   }}
+                />
+              )}
+
+              {result && status && (
+                <ArenaRunner
+                  status={status}
+                  step={step}
+                  run={result}
+                  onPauseRun={() => pauseBenchmark()}
+                  onResumeRun={() => resumeBenchmark()}
+                  onCancelRun={() => cancelBenchmark()}
+                  onRestartRun={async () => {
+                    const next = await restartBenchmark();
+                    if (next?.id) {
+                      router.push(`/arena/${next.id}`);
+                    }
+                  }}
+                  onPauseModel={(modelId) => pauseModel(modelId)}
+                  onResumeModel={(modelId) => resumeModel(modelId)}
+                  onRetryModel={(modelId) => retryModel(modelId)}
+                  onCancelModel={(modelId) => cancelModel(modelId)}
                 />
               )}
 

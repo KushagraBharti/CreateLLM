@@ -38,6 +38,7 @@ export default function Badge({ children, color, pulse, className }: BadgeProps)
 
 const statusConfig: Record<BenchmarkStatus, { label: string; color: string }> = {
   queued: { label: "Queued", color: "#8B8B96" },
+  paused: { label: "Paused", color: "#C9A84C" },
   generating: { label: "Generating", color: "#7B93A8" },
   critiquing: { label: "Critiquing", color: "#C9A84C" },
   awaiting_human_critique: { label: "Awaiting You", color: "#D49F66" },
@@ -52,7 +53,7 @@ const statusConfig: Record<BenchmarkStatus, { label: string; color: string }> = 
 
 export function StatusBadge({ status }: { status: BenchmarkStatus }) {
   const config = statusConfig[status];
-  const isActive = !["complete", "partial", "canceled", "dead_lettered", "error"].includes(status);
+  const isActive = !["complete", "partial", "canceled", "dead_lettered", "error", "paused"].includes(status);
   return (
     <Badge color={config.color} pulse={isActive}>
       {config.label}

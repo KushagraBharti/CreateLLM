@@ -2,12 +2,14 @@ import { promises as fs } from "fs";
 import path from "path";
 import {
   BenchmarkRun,
+  BenchmarkControlState,
   BenchmarkReasoningState,
   BenchmarkRunSummary,
   BenchmarkWebState,
   CircuitBreakerState,
   CreateBenchmarkRunInput,
   ModelCatalogEntry,
+  ModelControlState,
   ModelRunState,
   RunCheckpoint,
   RunCheckpointStage,
@@ -77,6 +79,26 @@ function createCircuitBreakerState(): CircuitBreakerState {
   return {
     status: "closed",
     failureCount: 0,
+  };
+}
+
+function createModelControlState(models: ModelCatalogEntry[]): Record<string, ModelControlState> {
+  return Object.fromEntries(
+    models.map((model) => [
+      model.id,
+      {
+        modelId: model.id,
+        isPaused: false,
+        isCanceled: false,
+      },
+    ])
+  );
+}
+
+function createControlState(models: ModelCatalogEntry[]): BenchmarkControlState {
+  return {
+    history: [],
+    modelControls: createModelControlState(models),
   };
 }
 
@@ -159,6 +181,92 @@ function inferSelectedModels(run: Partial<BenchmarkRun>) {
   return orderedIds.map((modelId) => getModelById(modelId) ?? createBringYourOwnModel(modelId));
 }
 
+function mergeModelControls(
+  selectedModels: ModelCatalogEntry[],
+  controls: BenchmarkRun["controls"] | undefined,
+  modelStates: Record<string, ModelRunState>
+): BenchmarkControlState {
+  const next = createControlState(selectedModels);
+  const incoming = controls?.modelControls ?? {};
+
+  for (const model of selectedModels) {
+    const incomingControl = incoming[model.id];
+    const state = modelStates[model.id];
+    next.modelControls[model.id] = {
+      modelId: model.id,
+      isPaused: incomingControl?.isPaused ?? state?.status === "paused",
+      isCanceled: incomingControl?.isCanceled ?? state?.status === "canceled",
+      lastAction: incomingControl?.lastAction,
+      lastActionAt: incomingControl?.lastActionAt,
+      note: incomingControl?.note,
+    };
+  }
+
+  next.history = controls?.history ?? [];
+  next.lastRunAction = controls?.lastRunAction;
+  next.lastRunActionAt = controls?.lastRunActionAt;
+  next.restartSourceRunId = controls?.restartSourceRunId;
+  return next;
+}
+
+function getArtifactEligibleModelIds(run: BenchmarkRun, stage: RunCheckpointStage): string[] {
+  switch (stage) {
+    case "generate":
+      return run.selectedModels.map((model) => model.id);
+    case "critique":
+    case "human_critique":
+    case "revise":
+      return run.ideas
+        .map((idea) => idea.modelId)
+        .filter((modelId, index, values) => values.indexOf(modelId) === index)
+        .filter((modelId) => run.modelStates[modelId]?.status !== "canceled");
+    case "vote":
+    case "complete":
+      return run.revisedIdeas
+        .map((idea) => idea.modelId)
+        .filter((modelId, index, values) => values.indexOf(modelId) === index)
+        .filter((modelId) => run.modelStates[modelId]?.status !== "canceled");
+    default:
+      return [];
+  }
+}
+
+function getArtifactCompletedModelIds(run: BenchmarkRun, stage: RunCheckpointStage): string[] {
+  switch (stage) {
+    case "generate":
+      return run.ideas.map((idea) => idea.modelId);
+    case "critique":
+    case "human_critique":
+      return run.critiqueVotes.map((vote) => vote.fromModelId);
+    case "revise":
+      return run.revisedIdeas.map((idea) => idea.modelId);
+    case "vote":
+    case "complete":
+      return run.finalRankings.map((ranking) => ranking.judgeModelId);
+    default:
+      return [];
+  }
+}
+
+function reconcileLoadedRun(run: BenchmarkRun): BenchmarkRun {
+  const eligibleCritiqueIds = getArtifactEligibleModelIds(run, "critique");
+  const completedCritiqueIds = getArtifactCompletedModelIds(run, "critique");
+
+  if (
+    run.status === "awaiting_human_critique" &&
+    completedCritiqueIds.length < eligibleCritiqueIds.length
+  ) {
+    return {
+      ...run,
+      status: "critiquing",
+      currentStep: "Recovering incomplete critique checkpoint",
+      checkpoint: createCheckpointForStage("critique", completedCritiqueIds),
+    };
+  }
+
+  return run;
+}
+
 function normalizeLegacyRun(run: Partial<BenchmarkRun>): BenchmarkRun {
   const selectedModels = run.selectedModels?.length ? run.selectedModels : inferSelectedModels(run);
   const participantCount = selectedModels.length;
@@ -214,7 +322,7 @@ function normalizeLegacyRun(run: Partial<BenchmarkRun>): BenchmarkRun {
     };
   }
 
-  return {
+  const normalized: BenchmarkRun = {
     id: run.id ?? generateId(),
     categoryId: run.categoryId ?? "venture",
     prompt: run.prompt ?? "",
@@ -247,6 +355,7 @@ function normalizeLegacyRun(run: Partial<BenchmarkRun>): BenchmarkRun {
         revisedIdeas.map((idea) => idea.modelId)
       ),
     cancellation: run.cancellation ?? { requested: false },
+    controls: mergeModelControls(selectedModels, run.controls, modelStates),
     circuitBreaker: run.circuitBreaker ?? createCircuitBreakerState(),
     web: run.web ?? createWebState(),
     reasoning: run.reasoning ?? createReasoningState(),
@@ -256,6 +365,7 @@ function normalizeLegacyRun(run: Partial<BenchmarkRun>): BenchmarkRun {
         minimumSuccessfulModels: minimumSuccessfulModels(participantCount),
       },
   };
+  return reconcileLoadedRun(normalized);
 }
 
 async function readRunFile(filePath: string): Promise<BenchmarkRun> {
@@ -324,6 +434,7 @@ class FileBenchmarkRepository implements BenchmarkRepository {
       failures: [],
       checkpoint: createCheckpoint(),
       cancellation: { requested: false },
+      controls: createControlState(selectedModels),
       circuitBreaker: createCircuitBreakerState(),
       web: createWebState(),
       reasoning: createReasoningState(),

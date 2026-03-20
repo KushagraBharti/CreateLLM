@@ -203,6 +203,7 @@ export interface BenchmarkReasoningState {
 
 export type BenchmarkStatus =
   | "queued"
+  | "paused"
   | "generating"
   | "critiquing"
   | "awaiting_human_critique"
@@ -232,6 +233,8 @@ export interface RunCheckpoint {
 export type ModelExecutionStatus =
   | "queued"
   | "running"
+  | "paused"
+  | "retrying"
   | "complete"
   | "failed"
   | "canceled"
@@ -259,6 +262,44 @@ export interface RunCancellation {
   requested: boolean;
   requestedAt?: string;
   reason?: string;
+}
+
+export type ControlActionScope = "run" | "model";
+
+export type ControlActionType =
+  | "pause"
+  | "resume"
+  | "cancel"
+  | "restart"
+  | "retry"
+  | "proceed";
+
+export interface ControlActionRecord {
+  id: string;
+  scope: ControlActionScope;
+  action: ControlActionType;
+  timestamp: string;
+  actor: "user" | "system";
+  stage: RunCheckpointStage;
+  modelId?: string;
+  reason?: string;
+}
+
+export interface ModelControlState {
+  modelId: string;
+  isPaused: boolean;
+  isCanceled: boolean;
+  lastAction?: ControlActionType;
+  lastActionAt?: string;
+  note?: string;
+}
+
+export interface BenchmarkControlState {
+  history: ControlActionRecord[];
+  modelControls: Record<string, ModelControlState>;
+  lastRunAction?: ControlActionType;
+  lastRunActionAt?: string;
+  restartSourceRunId?: string;
 }
 
 export interface CircuitBreakerState {
@@ -293,6 +334,7 @@ export interface BenchmarkRun {
   failures: RunFailureRecord[];
   checkpoint: RunCheckpoint;
   cancellation: RunCancellation;
+  controls: BenchmarkControlState;
   circuitBreaker: CircuitBreakerState;
   web: BenchmarkWebState;
   reasoning: BenchmarkReasoningState;

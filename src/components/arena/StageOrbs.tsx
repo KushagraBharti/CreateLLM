@@ -1,7 +1,7 @@
 "use client";
 
 import { motion } from "framer-motion";
-import { BenchmarkStatus } from "@/types";
+import { BenchmarkStatus, RunCheckpointStage } from "@/types";
 import { clsx } from "clsx";
 
 const stages: { status: BenchmarkStatus; label: string }[] = [
@@ -18,8 +18,38 @@ function getStageIndex(status: BenchmarkStatus): number {
   return idx;
 }
 
-export default function StageOrbs({ status }: { status: BenchmarkStatus }) {
-  const currentIndex = getStageIndex(status);
+function mapCheckpointStageToStatus(stage?: RunCheckpointStage): BenchmarkStatus | null {
+  if (!stage) return null;
+  switch (stage) {
+    case "generate":
+      return "generating";
+    case "critique":
+      return "critiquing";
+    case "human_critique":
+      return "awaiting_human_critique";
+    case "revise":
+      return "revising";
+    case "vote":
+      return "voting";
+    case "complete":
+      return "complete";
+    default:
+      return null;
+  }
+}
+
+export default function StageOrbs({
+  status,
+  checkpointStage,
+}: {
+  status: BenchmarkStatus;
+  checkpointStage?: RunCheckpointStage;
+}) {
+  const effectiveStatus =
+    ["paused", "partial", "dead_lettered"].includes(status)
+      ? mapCheckpointStageToStatus(checkpointStage) ?? status
+      : status;
+  const currentIndex = getStageIndex(effectiveStatus);
 
   return (
     <div className="flex items-center gap-0">

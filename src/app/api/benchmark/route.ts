@@ -32,7 +32,7 @@ export async function POST(request: NextRequest) {
       customModelIds,
     });
 
-    return Response.json({ id: run.id, status: run.status });
+    return Response.json(run);
   } catch (error) {
     return Response.json(
       { error: error instanceof Error ? error.message : "Failed to start benchmark" },

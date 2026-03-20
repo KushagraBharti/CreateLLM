@@ -40,7 +40,6 @@ import {
 } from "./storage";
 import { getOpenRouterCircuitBreaker } from "./circuit-breaker";
 import { getRunEventBus } from "./run-events";
-import { inCompletionOrder } from "./async";
 import {
   isUsableIdeaResponse,
   normalizeCritiqueVoteResponse,
@@ -844,11 +843,230 @@ function createFailure(
 function activeCompetitorIds(run: BenchmarkRun): string[] {
   return run.selectedModels
     .map((model) => model.id)
-    .filter((modelId) => !run.failedModels.includes(modelId));
+    .filter((modelId) => {
+      const state = run.modelStates[modelId];
+      return state?.status !== "canceled" && state?.status !== "failed" && !run.failedModels.includes(modelId);
+    });
 }
 
 function shouldStopForLowQuorum(run: BenchmarkRun, candidateCount: number): boolean {
   return candidateCount < run.metadata.minimumSuccessfulModels;
+}
+
+type StageTaskResult<T> = {
+  modelId: string;
+  value?: T;
+  error?: Error;
+};
+
+interface StageLoopConfig<T> {
+  stage: RunCheckpointStage;
+  status: Extract<BenchmarkRun["status"], "generating" | "critiquing" | "revising" | "voting">;
+  startStep: (run: BenchmarkRun) => string;
+  pausedStep: (run: BenchmarkRun) => string;
+  successStep: (run: BenchmarkRun, modelId: string) => string;
+  failureStep: (modelId: string) => string;
+  getCandidateModelIds: (run: BenchmarkRun) => string[];
+  isComplete: (run: BenchmarkRun, modelId: string) => boolean;
+  startTask: (
+    run: BenchmarkRun,
+    modelId: string,
+    controls: BenchmarkRuntimeControls
+  ) => Promise<T>;
+  applySuccess: (run: BenchmarkRun, modelId: string, value: T) => Promise<BenchmarkRun> | BenchmarkRun;
+  finalize: (run: BenchmarkRun) => Promise<BenchmarkRun>;
+}
+
+function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function normalizeStageStatesForExecution(run: BenchmarkRun, stage: RunCheckpointStage): BenchmarkRun {
+  const nextStates = { ...run.modelStates };
+  let changed = false;
+
+  for (const [modelId, state] of Object.entries(nextStates)) {
+    if (state.stage !== stage || state.status !== "running") continue;
+    nextStates[modelId] = {
+      ...state,
+      status: "queued",
+      startedAt: undefined,
+    };
+    changed = true;
+  }
+
+  if (!changed) return run;
+  return {
+    ...run,
+    modelStates: nextStates,
+  };
+}
+
+function alignModelStatesForStage(
+  run: BenchmarkRun,
+  stage: RunCheckpointStage,
+  candidateIds: string[],
+  isComplete: (run: BenchmarkRun, modelId: string) => boolean
+): BenchmarkRun {
+  const nextStates = { ...run.modelStates };
+  let changed = false;
+
+  for (const modelId of candidateIds) {
+    const state = nextStates[modelId];
+    if (!state || state.status === "canceled") continue;
+
+    if (isComplete(run, modelId)) {
+      if (state.stage !== stage || state.status !== "complete" || state.error) {
+        nextStates[modelId] = {
+          ...state,
+          stage,
+          status: "complete",
+          error: undefined,
+          completedAt: state.completedAt ?? new Date().toISOString(),
+        };
+        changed = true;
+      }
+      continue;
+    }
+
+    const shouldQueue =
+      state.stage !== stage ||
+      state.status === "complete" ||
+      state.status === "running";
+
+    if (shouldQueue) {
+      nextStates[modelId] = {
+        ...state,
+        stage,
+        status: state.status === "paused" ? "paused" : "queued",
+        error: undefined,
+        startedAt: undefined,
+        completedAt: undefined,
+      };
+      changed = true;
+    }
+  }
+
+  if (!changed) return run;
+  return {
+    ...run,
+    modelStates: nextStates,
+    checkpoint: createCheckpointForStage(
+      stage,
+      candidateIds.filter((modelId) => isComplete(run, modelId)),
+      run.checkpoint.readyForRevisionModelIds
+    ),
+  };
+}
+
+function isControlledModelState(state: BenchmarkRun["modelStates"][string] | undefined): boolean {
+  return state?.status === "paused" || state?.status === "canceled";
+}
+
+function canSpawnModelForStage(
+  run: BenchmarkRun,
+  stage: RunCheckpointStage,
+  modelId: string
+): boolean {
+  const state = run.modelStates[modelId];
+  if (!state) return false;
+  if (state.stage !== stage) return false;
+  return state.status === "queued" || state.status === "retrying" || state.status === "running";
+}
+
+async function runStageLoop<T>(
+  run: BenchmarkRun,
+  controls: BenchmarkRuntimeControls,
+  config: StageLoopConfig<T>
+): Promise<BenchmarkRun> {
+  let current = normalizeStageStatesForExecution(run, config.stage);
+  current = await persistAndPublish(current, config.status, config.startStep(current));
+  const running = new Map<string, Promise<StageTaskResult<T>>>();
+
+  while (true) {
+    current = (await loadBenchmarkRun(current.id)) ?? current;
+    const canceledAfterCompletion = await checkCancellation(current, controls);
+    if (canceledAfterCompletion) return canceledAfterCompletion;
+    if (current.status === "paused") return current;
+
+    const candidateIds = config.getCandidateModelIds(current);
+    const aligned = alignModelStatesForStage(current, config.stage, candidateIds, config.isComplete);
+    if (aligned !== current) {
+      current = aligned;
+      await persistRun(current);
+    }
+    for (const modelId of candidateIds) {
+      if (running.has(modelId) || config.isComplete(current, modelId)) continue;
+      if (!canSpawnModelForStage(current, config.stage, modelId)) continue;
+
+      current = {
+        ...current,
+        modelStates: {
+          ...current.modelStates,
+          [modelId]: {
+            ...current.modelStates[modelId],
+            stage: config.stage,
+            status: "running",
+            startedAt: new Date().toISOString(),
+            completedAt: undefined,
+            error: undefined,
+          },
+        },
+      };
+      await persistRun(current);
+
+      const taskSnapshot = current;
+      running.set(
+        modelId,
+        config
+          .startTask(taskSnapshot, modelId, controls)
+          .then((value) => ({ modelId, value }))
+          .catch((error) => ({
+            modelId,
+            error: error instanceof Error ? error : new Error(String(error)),
+          }))
+      );
+    }
+
+    if (running.size === 0) {
+      const pausedIds = candidateIds.filter((modelId) => current.modelStates[modelId]?.status === "paused");
+      if (pausedIds.length > 0) {
+        return persistAndPublish(current, "paused", config.pausedStep(current));
+      }
+      break;
+    }
+
+    const completion = await Promise.race<StageTaskResult<T> | null>([
+      ...Array.from(running.values()),
+      sleep(250).then(() => null),
+    ]);
+
+    if (!completion) continue;
+    running.delete(completion.modelId);
+
+    current = (await loadBenchmarkRun(current.id)) ?? current;
+    const canceledRun = await checkCancellation(current, controls);
+    if (canceledRun) return canceledRun;
+
+    const currentState = current.modelStates[completion.modelId];
+    if (completion.value) {
+      if (!isControlledModelState(currentState)) {
+        current = await config.applySuccess(current, completion.modelId, completion.value);
+        current = await persistAndPublish(current, config.status, config.successStep(current, completion.modelId));
+      }
+      continue;
+    }
+
+    if (!completion.error) continue;
+    if (current.status === "paused" || isControlledModelState(currentState)) {
+      continue;
+    }
+
+    current = await failModel(current, completion.modelId, config.stage, completion.error);
+    current = await persistAndPublish(current, config.status, config.failureStep(completion.modelId));
+  }
+
+  return config.finalize(current);
 }
 
 function mergeStageToolTrace(run: BenchmarkRun, trace: StageToolTrace): BenchmarkRun {
@@ -943,7 +1161,7 @@ async function checkCancellation(run: BenchmarkRun, controls: BenchmarkRuntimeCo
   if (!(await controls.isCancellationRequested())) return null;
   const next: BenchmarkRun = {
     ...run,
-    status: run.ideas.length > 0 || run.revisedIdeas.length > 0 ? "partial" : "canceled",
+    status: "canceled",
     currentStep: "Run canceled",
     cancellation: {
       ...run.cancellation,
@@ -962,106 +1180,97 @@ async function runGenerateStage(
 ): Promise<BenchmarkRun> {
   const category = getCategoryById(run.categoryId);
   if (!category) throw new Error(`Unknown category: ${run.categoryId}`);
-
-  let current = await persistAndPublish(run, "generating", `Generating ideas from ${run.selectedModels.length} models...`);
-  const pendingModels = current.selectedModels.filter(
-    (model) =>
-      !current.ideas.some((idea) => idea.modelId === model.id) &&
-      !current.failedModels.includes(model.id)
-  );
-
-  const tasks = pendingModels.map(async (model) => {
-    const abortController = controls.createAbortController(`generate:${model.id}`);
-    try {
-      const generatePrompt = buildGeneratePrompt(category, current.prompt, {
-        includeWebSearchInstructions: true,
-      });
-      const messages: ChatMessage[] = [
-        { role: "system", content: generatePrompt.system },
-        { role: "user", content: generatePrompt.user },
-      ];
-      const { raw, trace } = await runToolEnabledIdeaStage(current, {
-        stage: "generate",
-        modelId: model.id,
-        openRouterId: model.openRouterId,
-        reasoning: REASONING_GENERATE,
-        initialMessages: messages,
-        signal: abortController.signal,
-        onChunk: (chunk) => getRunEventBus().publishToken(current.id, model.id, "generate", chunk),
-      });
-      const idea: Idea = {
-        modelId: model.id,
-        content: parseIdeaJson(raw, category),
-        raw,
-        timestamp: new Date().toISOString(),
-      };
-      return { modelId: model.id, idea, trace };
-    } finally {
-      controls.releaseAbortController(`generate:${model.id}`);
-    }
-  });
-
-  let completed = current.ideas.map((idea) => idea.modelId);
-
-  for await (const result of inCompletionOrder(tasks)) {
-    current = (await loadBenchmarkRun(current.id)) ?? current;
-    const canceled = await checkCancellation(current, controls);
-    if (canceled) return canceled;
-
-    if (result.value) {
-      const { modelId, idea, trace } = result.value;
-      current = {
-        ...current,
-        ideas: sortByModelOrder(
-          [...current.ideas.filter((entry) => entry.modelId !== modelId), idea],
-          current.selectedModels.map((model) => model.id)
-        ),
-        modelStates: {
-          ...current.modelStates,
-          [modelId]: {
-            ...current.modelStates[modelId],
-            status: "complete",
-            stage: "generate",
-            completedAt: new Date().toISOString(),
+  return runStageLoop(run, controls, {
+    stage: "generate",
+    status: "generating",
+    startStep: (current) => `Generating ideas from ${current.selectedModels.length} models...`,
+    pausedStep: () => "Generation paused while waiting on paused models",
+    successStep: (current, modelId) =>
+      `Generated idea ${current.ideas.length}/${current.selectedModels.length} (${getModelName(modelId)})`,
+    failureStep: (modelId) => `${getModelName(modelId)} failed during generation`,
+    getCandidateModelIds: (current) =>
+      current.selectedModels
+        .map((model) => model.id)
+        .filter((modelId) => current.modelStates[modelId]?.status !== "canceled"),
+    isComplete: (current, modelId) => current.ideas.some((idea) => idea.modelId === modelId),
+    startTask: async (current, modelId, runtimeControls) => {
+      const model = current.selectedModels.find((entry) => entry.id === modelId);
+      if (!model) throw new Error(`Model not found: ${modelId}`);
+      const abortController = runtimeControls.createAbortController(`generate:${modelId}`);
+      try {
+        const generatePrompt = buildGeneratePrompt(category, current.prompt, {
+          includeWebSearchInstructions: true,
+        });
+        const messages: ChatMessage[] = [
+          { role: "system", content: generatePrompt.system },
+          { role: "user", content: generatePrompt.user },
+        ];
+        const { raw, trace } = await runToolEnabledIdeaStage(current, {
+          stage: "generate",
+          modelId,
+          openRouterId: model.openRouterId,
+          reasoning: REASONING_GENERATE,
+          initialMessages: messages,
+          signal: abortController.signal,
+          onChunk: (chunk) => getRunEventBus().publishToken(current.id, modelId, "generate", chunk),
+        });
+        return {
+          idea: {
+            modelId,
+            content: parseIdeaJson(raw, category),
+            raw,
+            timestamp: new Date().toISOString(),
+          } as Idea,
+          trace,
+        };
+      } finally {
+        runtimeControls.releaseAbortController(`generate:${modelId}`);
+      }
+    },
+    applySuccess: (current, modelId, value) => {
+      const completed = [...new Set([...current.checkpoint.completedModelIds, modelId])];
+      return mergeStageToolTrace(
+        {
+          ...current,
+          ideas: sortByModelOrder(
+            [...current.ideas.filter((entry) => entry.modelId !== modelId), value.idea],
+            current.selectedModels.map((model) => model.id)
+          ),
+          modelStates: {
+            ...current.modelStates,
+            [modelId]: {
+              ...current.modelStates[modelId],
+              status: "complete",
+              stage: "generate",
+              completedAt: new Date().toISOString(),
+            },
           },
+          checkpoint: createCheckpointForStage("generate", completed),
         },
-      };
-      current = mergeStageToolTrace(current, trace);
-      completed = [...new Set([...completed, modelId])];
-      current.checkpoint = createCheckpointForStage("generate", completed);
-      current = await persistAndPublish(
-        current,
-        "generating",
-        `Generated idea ${current.ideas.length}/${current.selectedModels.length} (${getModelName(modelId)})`
+        value.trace
       );
-      continue;
-    }
+    },
+    finalize: async (current) => {
+      const survivingIdeas = current.ideas.filter((idea) => {
+        const state = current.modelStates[idea.modelId];
+        return state?.status !== "failed" && state?.status !== "canceled";
+      });
+      if (shouldStopForLowQuorum(current, survivingIdeas.length)) {
+        const status: BenchmarkRun["status"] = survivingIdeas.length === 0 ? "dead_lettered" : "partial";
+        current = {
+          ...current,
+          error: "Too few models responded to continue.",
+          failures: [...current.failures, createFailure("generate", "Too few models responded to continue.", false)],
+          checkpoint: createCheckpointForStage("generate", survivingIdeas.map((idea) => idea.modelId)),
+        };
+        return persistAndPublish(current, status, current.error ?? "Too few models responded to continue.");
+      }
 
-    const modelId = pendingModels[result.index]?.id;
-    if (!modelId || !result.error) continue;
-    current = await failModel(current, modelId, "generate", result.error);
-    current = await persistAndPublish(
-      current,
-      "generating",
-      `${getModelName(modelId)} failed during generation`
-    );
-  }
-
-  const survivingIdeas = current.ideas.filter((idea) => !current.failedModels.includes(idea.modelId));
-  if (shouldStopForLowQuorum(current, survivingIdeas.length)) {
-    const status: BenchmarkRun["status"] = survivingIdeas.length === 0 ? "dead_lettered" : "partial";
-    current = {
-      ...current,
-      error: "Too few models responded to continue.",
-      failures: [...current.failures, createFailure("generate", "Too few models responded to continue.", false)],
-      checkpoint: createCheckpointForStage("generate", survivingIdeas.map((idea) => idea.modelId)),
-    };
-    return persistAndPublish(current, status, current.error ?? "Too few models responded to continue.");
-  }
-
-  current.checkpoint = createCheckpointForStage("critique", survivingIdeas.map((idea) => idea.modelId));
-  await persistRun(current);
-  return current;
+      current.checkpoint = createCheckpointForStage("critique", survivingIdeas.map((idea) => idea.modelId));
+      await persistRun(current);
+      return current;
+    },
+  });
 }
 
 async function runCritiqueStage(
@@ -1070,82 +1279,86 @@ async function runCritiqueStage(
 ): Promise<BenchmarkRun> {
   const category = getCategoryById(run.categoryId);
   if (!category) throw new Error(`Unknown category: ${run.categoryId}`);
-
-  let current = await persistAndPublish(
-    run,
-    "critiquing",
-    `Models are critiquing and ranking ideas (${run.critiqueVotes.length}/${activeCompetitorIds(run).length})...`
-  );
-
-  const activeIdeas = sortByModelOrder(
-    current.ideas.filter((idea) => !current.failedModels.includes(idea.modelId)),
-    current.selectedModels.map((model) => model.id)
-  );
-  const anonymousMap = buildAnonymousMap(activeIdeas.map((idea) => idea.modelId));
-  const judges = activeIdeas.filter(
-    (idea) => !current.critiqueVotes.some((vote) => vote.fromModelId === idea.modelId)
-  );
-
-  const tasks = judges.map(async (judgeIdea) => {
-    const model = current.selectedModels.find((entry) => entry.id === judgeIdea.modelId);
-    if (!model) throw new Error(`Model not found: ${judgeIdea.modelId}`);
-
-    const shuffledIdeas = shuffleArray(activeIdeas, `critique_${judgeIdea.modelId}_${current.id}`);
-    const { system, user } = buildCritiqueVotePrompt(
-      shuffledIdeas,
-      judgeIdea.modelId,
-      category,
-      current.prompt,
-      anonymousMap
-    );
-    const abortController = controls.createAbortController(`critique:${judgeIdea.modelId}`);
-    const messages: ChatMessage[] = [
-      { role: "system", content: system },
-      { role: "user", content: user },
-    ];
-    try {
-      const raw = await callModelWithJsonRetry(
-        model.openRouterId,
-        messages,
-        REASONING_CRITIQUE,
-        isValidCritiqueVoteJson,
-        abortController.signal,
-        {
-          onBeforeRequest: createPromptCaptureLogger(
-            current.id,
-            "critique",
-            judgeIdea.modelId,
-            model.openRouterId,
-            REASONING_CRITIQUE,
-            false,
-            messages
-          ),
-        }
+  return runStageLoop(run, controls, {
+    stage: "critique",
+    status: "critiquing",
+    startStep: (current) =>
+      `Models are critiquing and ranking ideas (${current.critiqueVotes.length}/${activeCompetitorIds(current).length})...`,
+    pausedStep: () => "Critique paused while waiting on paused models",
+    successStep: (current, modelId) =>
+      `Critique complete ${current.critiqueVotes.length}/${activeCompetitorIds(current).length} (${getModelName(modelId)})`,
+    failureStep: (modelId) => `${getModelName(modelId)} failed during critique`,
+    getCandidateModelIds: (current) =>
+      sortByModelOrder(
+        current.ideas.filter((idea) => {
+          const state = current.modelStates[idea.modelId];
+          return state?.status !== "failed" && state?.status !== "canceled";
+        }),
+        current.selectedModels.map((model) => model.id)
+      ).map((idea) => idea.modelId),
+    isComplete: (current, modelId) => current.critiqueVotes.some((vote) => vote.fromModelId === modelId),
+    startTask: async (current, modelId, runtimeControls) => {
+      const model = current.selectedModels.find((entry) => entry.id === modelId);
+      if (!model) throw new Error(`Model not found: ${modelId}`);
+      const activeIdeas = sortByModelOrder(
+        current.ideas.filter((idea) => {
+          const state = current.modelStates[idea.modelId];
+          return state?.status !== "failed" && state?.status !== "canceled";
+        }),
+        current.selectedModels.map((entry) => entry.id)
       );
-      const parsed = parseCritiqueVoteJson(raw, anonymousMap);
+      const anonymousMap = buildAnonymousMap(activeIdeas.map((idea) => idea.modelId));
+      const shuffledIdeas = shuffleArray(activeIdeas, `critique_${modelId}_${current.id}`);
+      const { system, user } = buildCritiqueVotePrompt(
+        shuffledIdeas,
+        modelId,
+        category,
+        current.prompt,
+        anonymousMap
+      );
+      const abortController = runtimeControls.createAbortController(`critique:${modelId}`);
+      const messages: ChatMessage[] = [
+        { role: "system", content: system },
+        { role: "user", content: user },
+      ];
+      try {
+        const raw = await callModelWithJsonRetry(
+          model.openRouterId,
+          messages,
+          REASONING_CRITIQUE,
+          isValidCritiqueVoteJson,
+          abortController.signal,
+          {
+            onBeforeRequest: createPromptCaptureLogger(
+              current.id,
+              "critique",
+              modelId,
+              model.openRouterId,
+              REASONING_CRITIQUE,
+              false,
+              messages
+            ),
+          }
+        );
+        const parsed = parseCritiqueVoteJson(raw, anonymousMap);
+        return {
+          fromModelId: modelId,
+          critiques: parsed.critiques.filter((entry) => {
+            const state = current.modelStates[entry.targetModelId];
+            return state?.status !== "failed" && state?.status !== "canceled";
+          }),
+          rankings: parsed.rankings.filter((entry) => {
+            const state = current.modelStates[entry.modelId];
+            return state?.status !== "failed" && state?.status !== "canceled";
+          }),
+        } as CritiqueVoteResult;
+      } finally {
+        runtimeControls.releaseAbortController(`critique:${modelId}`);
+      }
+    },
+    applySuccess: (current, modelId, vote) => {
+      const completed = [...new Set([...current.checkpoint.completedModelIds, modelId])];
       return {
-        modelId: judgeIdea.modelId,
-        vote: {
-          fromModelId: judgeIdea.modelId,
-          critiques: parsed.critiques.filter((entry) => !current.failedModels.includes(entry.targetModelId)),
-          rankings: parsed.rankings.filter((entry) => !current.failedModels.includes(entry.modelId)),
-        } as CritiqueVoteResult,
-      };
-    } finally {
-      controls.releaseAbortController(`critique:${judgeIdea.modelId}`);
-    }
-  });
-
-  let completed = current.critiqueVotes.map((vote) => vote.fromModelId);
-
-  for await (const result of inCompletionOrder(tasks)) {
-    current = (await loadBenchmarkRun(current.id)) ?? current;
-    const canceled = await checkCancellation(current, controls);
-    if (canceled) return canceled;
-
-    if (result.value) {
-      const { modelId, vote } = result.value;
-      current = {
         ...current,
         critiqueVotes: [
           ...current.critiqueVotes.filter((entry) => entry.fromModelId !== modelId),
@@ -1160,40 +1373,29 @@ async function runCritiqueStage(
             completedAt: new Date().toISOString(),
           },
         },
+        checkpoint: createCheckpointForStage("critique", completed),
       };
-      completed = [...new Set([...completed, modelId])];
-      current.checkpoint = createCheckpointForStage("critique", completed);
-      current = await persistAndPublish(
-        current,
-        "critiquing",
-        `Critique complete ${current.critiqueVotes.length}/${activeIdeas.length} (${getModelName(modelId)})`
+    },
+    finalize: async (current) => {
+      const survivingModels = activeCompetitorIds(current).filter((modelId) =>
+        current.ideas.some((idea) => idea.modelId === modelId)
       );
-      continue;
-    }
+      if (shouldStopForLowQuorum(current, survivingModels.length)) {
+        current = {
+          ...current,
+          error: "Too few models remained after critique.",
+          failures: [...current.failures, createFailure("critique", "Too few models remained after critique.", false)],
+        };
+        return persistAndPublish(current, "partial", current.error ?? "Too few models remained after critique.");
+      }
 
-    const modelId = judges[result.index]?.modelId;
-    if (!modelId || !result.error) continue;
-    current = await failModel(current, modelId, "critique", result.error);
-    current = await persistAndPublish(current, "critiquing", `${getModelName(modelId)} failed during critique`);
-  }
-
-  const survivingModels = activeCompetitorIds(current).filter((modelId) =>
-    current.ideas.some((idea) => idea.modelId === modelId)
-  );
-  if (shouldStopForLowQuorum(current, survivingModels.length)) {
-    current = {
-      ...current,
-      error: "Too few models remained after critique.",
-      failures: [...current.failures, createFailure("critique", "Too few models remained after critique.", false)],
-    };
-    return persistAndPublish(current, "partial", current.error ?? "Too few models remained after critique.");
-  }
-
-  current.checkpoint = createCheckpointForStage("human_critique", survivingModels, survivingModels);
-  current.status = "awaiting_human_critique";
-  current.currentStep = "Optional human critique ready";
-  await persistRun(current);
-  return persistAndPublish(current, "awaiting_human_critique", "Review critiques or proceed to revision");
+      current.checkpoint = createCheckpointForStage("human_critique", survivingModels, survivingModels);
+      current.status = "awaiting_human_critique";
+      current.currentStep = "Optional human critique ready";
+      await persistRun(current);
+      return persistAndPublish(current, "awaiting_human_critique", "Review critiques or proceed to revision");
+    },
+  });
 }
 
 async function runRevisionStage(
@@ -1202,126 +1404,117 @@ async function runRevisionStage(
 ): Promise<BenchmarkRun> {
   const category = getCategoryById(run.categoryId);
   if (!category) throw new Error(`Unknown category: ${run.categoryId}`);
+  return runStageLoop(run, controls, {
+    stage: "revise",
+    status: "revising",
+    startStep: (current) =>
+      `Models are revising ideas (${current.revisedIdeas.length}/${activeCompetitorIds(current).length})...`,
+    pausedStep: () => "Revision paused while waiting on paused models",
+    successStep: (current, modelId) =>
+      `Revised ${current.revisedIdeas.length}/${activeCompetitorIds(current).length} (${getModelName(modelId)})`,
+    failureStep: (modelId) => `${getModelName(modelId)} failed during revision`,
+    getCandidateModelIds: (current) =>
+      current.ideas
+        .filter((idea) => {
+          const state = current.modelStates[idea.modelId];
+          return state?.status !== "failed" && state?.status !== "canceled";
+        })
+        .map((idea) => idea.modelId),
+    isComplete: (current, modelId) => current.revisedIdeas.some((idea) => idea.modelId === modelId),
+    startTask: async (current, modelId, runtimeControls) => {
+      const model = current.selectedModels.find((entry) => entry.id === modelId);
+      const idea = current.ideas.find((entry) => entry.modelId === modelId);
+      if (!model || !idea) throw new Error(`Model not found: ${modelId}`);
 
-  let current = await persistAndPublish(
-    run,
-    "revising",
-    `Models are revising ideas (${run.revisedIdeas.length}/${activeCompetitorIds(run).length})...`
-  );
-
-  const activeIdeas = current.ideas.filter((idea) => !current.failedModels.includes(idea.modelId));
-  const pendingIdeas = activeIdeas.filter(
-    (idea) => !current.revisedIdeas.some((revised) => revised.modelId === idea.modelId)
-  );
-
-  const tasks = pendingIdeas.map(async (idea) => {
-    const model = current.selectedModels.find((entry) => entry.id === idea.modelId);
-    if (!model) throw new Error(`Model not found: ${idea.modelId}`);
-
-    const critiquesForIdea: CritiqueEntry[] = [];
-    for (const vote of current.critiqueVotes) {
-      for (const critique of vote.critiques) {
-        if (critique.targetModelId === idea.modelId) critiquesForIdea.push(critique);
+      const critiquesForIdea: CritiqueEntry[] = [];
+      for (const vote of current.critiqueVotes) {
+        for (const critique of vote.critiques) {
+          if (critique.targetModelId === modelId) critiquesForIdea.push(critique);
+        }
       }
-    }
-    for (const critique of current.humanCritiques) {
-      if (critique.targetModelId === idea.modelId) critiquesForIdea.push(critique);
-    }
+      for (const critique of current.humanCritiques) {
+        if (critique.targetModelId === modelId) critiquesForIdea.push(critique);
+      }
 
-    const priorSourceSummary = formatPriorSourceSummary(
-      current.web.retrievedSources
-        .filter((source) => source.stage === "generate" && source.modelId === idea.modelId)
-        .slice(0, current.web.config.maxResultsPerSearch * current.web.config.maxSearchCallsPerStagePerModel)
-    );
-    const { system, user } = buildRevisionPrompt(idea, critiquesForIdea, category, current.prompt, {
-      includeWebSearchInstructions: true,
-      priorSourceSummary,
-    });
-    const abortController = controls.createAbortController(`revise:${idea.modelId}`);
-    const messages: ChatMessage[] = [
-      { role: "system", content: system },
-      { role: "user", content: user },
-    ];
-    try {
-      const { raw, trace } = await runToolEnabledIdeaStage(current, {
-        stage: "revise",
-        modelId: idea.modelId,
-        openRouterId: model.openRouterId,
-        reasoning: REASONING_REVISE,
-        initialMessages: messages,
-        signal: abortController.signal,
-        onChunk: (chunk) => getRunEventBus().publishToken(current.id, idea.modelId, "revise", chunk),
-      });
-      return {
-        modelId: idea.modelId,
-        idea: {
-          modelId: idea.modelId,
-          content: parseIdeaJson(raw, category),
-          raw,
-          timestamp: new Date().toISOString(),
-        } as Idea,
-        trace,
-      };
-    } finally {
-      controls.releaseAbortController(`revise:${idea.modelId}`);
-    }
-  });
-
-  let completed = current.revisedIdeas.map((idea) => idea.modelId);
-
-  for await (const result of inCompletionOrder(tasks)) {
-    current = (await loadBenchmarkRun(current.id)) ?? current;
-    const canceled = await checkCancellation(current, controls);
-    if (canceled) return canceled;
-
-    if (result.value) {
-      const { modelId, idea, trace } = result.value;
-      current = {
-        ...current,
-        revisedIdeas: sortByModelOrder(
-          [...current.revisedIdeas.filter((entry) => entry.modelId !== modelId), idea],
-          current.selectedModels.map((model) => model.id)
-        ),
-        modelStates: {
-          ...current.modelStates,
-          [modelId]: {
-            ...current.modelStates[modelId],
-            status: "complete",
-            stage: "revise",
-            completedAt: new Date().toISOString(),
-          },
-        },
-      };
-      current = mergeStageToolTrace(current, trace);
-      completed = [...new Set([...completed, modelId])];
-      current.checkpoint = createCheckpointForStage("revise", completed);
-      current = await persistAndPublish(
-        current,
-        "revising",
-        `Revised ${current.revisedIdeas.length}/${activeIdeas.length} (${getModelName(modelId)})`
+      const priorSourceSummary = formatPriorSourceSummary(
+        current.web.retrievedSources
+          .filter((source) => source.stage === "generate" && source.modelId === modelId)
+          .slice(0, current.web.config.maxResultsPerSearch * current.web.config.maxSearchCallsPerStagePerModel)
       );
-      continue;
-    }
+      const { system, user } = buildRevisionPrompt(idea, critiquesForIdea, category, current.prompt, {
+        includeWebSearchInstructions: true,
+        priorSourceSummary,
+      });
+      const abortController = runtimeControls.createAbortController(`revise:${modelId}`);
+      const messages: ChatMessage[] = [
+        { role: "system", content: system },
+        { role: "user", content: user },
+      ];
+      try {
+        const { raw, trace } = await runToolEnabledIdeaStage(current, {
+          stage: "revise",
+          modelId,
+          openRouterId: model.openRouterId,
+          reasoning: REASONING_REVISE,
+          initialMessages: messages,
+          signal: abortController.signal,
+          onChunk: (chunk) => getRunEventBus().publishToken(current.id, modelId, "revise", chunk),
+        });
+        return {
+          idea: {
+            modelId,
+            content: parseIdeaJson(raw, category),
+            raw,
+            timestamp: new Date().toISOString(),
+          } as Idea,
+          trace,
+        };
+      } finally {
+        runtimeControls.releaseAbortController(`revise:${modelId}`);
+      }
+    },
+    applySuccess: (current, modelId, value) => {
+      const completed = [...new Set([...current.checkpoint.completedModelIds, modelId])];
+      return mergeStageToolTrace(
+        {
+          ...current,
+          revisedIdeas: sortByModelOrder(
+            [...current.revisedIdeas.filter((entry) => entry.modelId !== modelId), value.idea],
+            current.selectedModels.map((model) => model.id)
+          ),
+          modelStates: {
+            ...current.modelStates,
+            [modelId]: {
+              ...current.modelStates[modelId],
+              status: "complete",
+              stage: "revise",
+              completedAt: new Date().toISOString(),
+            },
+          },
+          checkpoint: createCheckpointForStage("revise", completed),
+        },
+        value.trace
+      );
+    },
+    finalize: async (current) => {
+      const survivingRevisions = current.revisedIdeas.filter((idea) => {
+        const state = current.modelStates[idea.modelId];
+        return state?.status !== "failed" && state?.status !== "canceled";
+      });
+      if (shouldStopForLowQuorum(current, survivingRevisions.length)) {
+        current = {
+          ...current,
+          error: "Too few revised ideas remained for final voting.",
+          failures: [...current.failures, createFailure("revise", "Too few revised ideas remained for final voting.", false)],
+        };
+        return persistAndPublish(current, "partial", current.error ?? "Too few revised ideas remained for final voting.");
+      }
 
-    const modelId = pendingIdeas[result.index]?.modelId;
-    if (!modelId || !result.error) continue;
-    current = await failModel(current, modelId, "revise", result.error);
-    current = await persistAndPublish(current, "revising", `${getModelName(modelId)} failed during revision`);
-  }
-
-  const survivingRevisions = current.revisedIdeas.filter((idea) => !current.failedModels.includes(idea.modelId));
-  if (shouldStopForLowQuorum(current, survivingRevisions.length)) {
-    current = {
-      ...current,
-      error: "Too few revised ideas remained for final voting.",
-      failures: [...current.failures, createFailure("revise", "Too few revised ideas remained for final voting.", false)],
-    };
-    return persistAndPublish(current, "partial", current.error ?? "Too few revised ideas remained for final voting.");
-  }
-
-  current.checkpoint = createCheckpointForStage("vote", survivingRevisions.map((idea) => idea.modelId));
-  await persistRun(current);
-  return current;
+      current.checkpoint = createCheckpointForStage("vote", survivingRevisions.map((idea) => idea.modelId));
+      await persistRun(current);
+      return current;
+    },
+  });
 }
 
 async function runVotingStage(
@@ -1330,79 +1523,77 @@ async function runVotingStage(
 ): Promise<BenchmarkRun> {
   const category = getCategoryById(run.categoryId);
   if (!category) throw new Error(`Unknown category: ${run.categoryId}`);
+  return runStageLoop(run, controls, {
+    stage: "vote",
+    status: "voting",
+    startStep: (current) => `Final round of voting (${current.finalRankings.length}/${current.revisedIdeas.length})...`,
+    pausedStep: () => "Final voting paused while waiting on paused models",
+    successStep: (current, modelId) =>
+      `Vote ${current.finalRankings.length}/${current.revisedIdeas.length} (${getModelName(modelId)})`,
+    failureStep: (modelId) => `${getModelName(modelId)} failed during final vote`,
+    getCandidateModelIds: (current) =>
+      sortByModelOrder(
+        current.revisedIdeas.filter((idea) => {
+          const state = current.modelStates[idea.modelId];
+          return state?.status !== "failed" && state?.status !== "canceled";
+        }),
+        current.selectedModels.map((model) => model.id)
+      ).map((idea) => idea.modelId),
+    isComplete: (current, modelId) => current.finalRankings.some((ranking) => ranking.judgeModelId === modelId),
+    startTask: async (current, modelId, runtimeControls) => {
+      const model = current.selectedModels.find((entry) => entry.id === modelId);
+      if (!model) throw new Error(`Model not found: ${modelId}`);
 
-  let current = await persistAndPublish(
-    run,
-    "voting",
-    `Final round of voting (${run.finalRankings.length}/${run.revisedIdeas.length})...`
-  );
-
-  const revisedIdeas = sortByModelOrder(
-    current.revisedIdeas.filter((idea) => !current.failedModels.includes(idea.modelId)),
-    current.selectedModels.map((model) => model.id)
-  );
-  const anonymousMap = buildAnonymousMap(revisedIdeas.map((idea) => idea.modelId));
-  const judges = revisedIdeas.filter(
-    (idea) => !current.finalRankings.some((ranking) => ranking.judgeModelId === idea.modelId)
-  );
-
-  const tasks = judges.map(async (judgeIdea) => {
-    const model = current.selectedModels.find((entry) => entry.id === judgeIdea.modelId);
-    if (!model) throw new Error(`Model not found: ${judgeIdea.modelId}`);
-
-    const shuffledIdeas = shuffleArray(revisedIdeas, `vote_${judgeIdea.modelId}_${current.id}`);
-    const { system, user } = buildFinalVotePrompt(
-      shuffledIdeas,
-      category,
-      current.prompt,
-      anonymousMap
-    );
-    const abortController = controls.createAbortController(`vote:${judgeIdea.modelId}`);
-    const messages: ChatMessage[] = [
-      { role: "system", content: system },
-      { role: "user", content: user },
-    ];
-    try {
-      const raw = await callModelWithJsonRetry(
-        model.openRouterId,
-        messages,
-        REASONING_VOTE,
-        isValidFinalVoteJson,
-        abortController.signal,
-        {
-          onBeforeRequest: createPromptCaptureLogger(
-            current.id,
-            "vote",
-            judgeIdea.modelId,
-            model.openRouterId,
-            REASONING_VOTE,
-            false,
-            messages
-          ),
-        }
+      const revisedIdeas = sortByModelOrder(
+        current.revisedIdeas.filter((idea) => {
+          const state = current.modelStates[idea.modelId];
+          return state?.status !== "failed" && state?.status !== "canceled";
+        }),
+        current.selectedModels.map((entry) => entry.id)
       );
-      return {
-        modelId: judgeIdea.modelId,
-        ranking: {
-          judgeModelId: judgeIdea.modelId,
+      const anonymousMap = buildAnonymousMap(revisedIdeas.map((idea) => idea.modelId));
+      const shuffledIdeas = shuffleArray(revisedIdeas, `vote_${modelId}_${current.id}`);
+      const { system, user } = buildFinalVotePrompt(
+        shuffledIdeas,
+        category,
+        current.prompt,
+        anonymousMap
+      );
+      const abortController = runtimeControls.createAbortController(`vote:${modelId}`);
+      const messages: ChatMessage[] = [
+        { role: "system", content: system },
+        { role: "user", content: user },
+      ];
+      try {
+        const raw = await callModelWithJsonRetry(
+          model.openRouterId,
+          messages,
+          REASONING_VOTE,
+          isValidFinalVoteJson,
+          abortController.signal,
+          {
+            onBeforeRequest: createPromptCaptureLogger(
+              current.id,
+              "vote",
+              modelId,
+              model.openRouterId,
+              REASONING_VOTE,
+              false,
+              messages
+            ),
+          }
+        );
+        return {
+          judgeModelId: modelId,
           rankings: parseFinalVoteJson(raw, anonymousMap),
-        } as Ranking,
-      };
-    } finally {
-      controls.releaseAbortController(`vote:${judgeIdea.modelId}`);
-    }
-  });
-
-  let completed = current.finalRankings.map((ranking) => ranking.judgeModelId);
-
-  for await (const result of inCompletionOrder(tasks)) {
-    current = (await loadBenchmarkRun(current.id)) ?? current;
-    const canceled = await checkCancellation(current, controls);
-    if (canceled) return canceled;
-
-    if (result.value) {
-      const { modelId, ranking } = result.value;
-      current = {
+        } as Ranking;
+      } finally {
+        runtimeControls.releaseAbortController(`vote:${modelId}`);
+      }
+    },
+    applySuccess: (current, modelId, ranking) => {
+      const completed = [...new Set([...current.checkpoint.completedModelIds, modelId])];
+      return {
         ...current,
         finalRankings: [
           ...current.finalRankings.filter((entry) => entry.judgeModelId !== modelId),
@@ -1417,36 +1608,29 @@ async function runVotingStage(
             completedAt: new Date().toISOString(),
           },
         },
+        checkpoint: createCheckpointForStage("vote", completed),
       };
-      completed = [...new Set([...completed, modelId])];
-      current.checkpoint = createCheckpointForStage("vote", completed);
-      current = await persistAndPublish(
-        current,
-        "voting",
-        `Vote ${current.finalRankings.length}/${revisedIdeas.length} (${getModelName(modelId)})`
-      );
-      continue;
-    }
+    },
+    finalize: async (current) => {
+      const finalJudgeCount = current.finalRankings.length;
+      if (shouldStopForLowQuorum(current, finalJudgeCount)) {
+        current = {
+          ...current,
+          error: "Too few final votes were completed.",
+          failures: [...current.failures, createFailure("vote", "Too few final votes were completed.", false)],
+        };
+        return persistAndPublish(current, "partial", current.error ?? "Too few final votes were completed.");
+      }
 
-    const modelId = judges[result.index]?.modelId;
-    if (!modelId || !result.error) continue;
-    current = await failModel(current, modelId, "vote", result.error);
-    current = await persistAndPublish(current, "voting", `${getModelName(modelId)} failed during final vote`);
-  }
-
-  const finalJudgeCount = current.finalRankings.length;
-  if (shouldStopForLowQuorum(current, finalJudgeCount)) {
-    current = {
-      ...current,
-      error: "Too few final votes were completed.",
-      failures: [...current.failures, createFailure("vote", "Too few final votes were completed.", false)],
-    };
-    return persistAndPublish(current, "partial", current.error ?? "Too few final votes were completed.");
-  }
-
-  current.checkpoint = createCheckpointForStage("complete", revisedIdeas.map((idea) => idea.modelId));
-  await persistRun(current);
-  return persistAndPublish(current, "complete", "Benchmark complete!");
+      const revisedIdeas = current.revisedIdeas.filter((idea) => {
+        const state = current.modelStates[idea.modelId];
+        return state?.status !== "failed" && state?.status !== "canceled";
+      });
+      current.checkpoint = createCheckpointForStage("complete", revisedIdeas.map((idea) => idea.modelId));
+      await persistRun(current);
+      return persistAndPublish(current, "complete", "Benchmark complete!");
+    },
+  });
 }
 
 export async function executeBenchmarkRun(
@@ -1459,13 +1643,13 @@ export async function executeBenchmarkRun(
   let current = run;
 
   try {
-    if (current.status === "complete" || current.status === "canceled") {
+    if (current.status === "complete" || current.status === "canceled" || current.status === "paused") {
       return current;
     }
 
     if (current.checkpoint.stage === "generate") {
       current = await runGenerateStage(current, controls);
-      if (["complete", "partial", "canceled", "dead_lettered", "error"].includes(current.status)) {
+      if (["complete", "partial", "canceled", "dead_lettered", "error", "paused"].includes(current.status)) {
         return current;
       }
     }
@@ -1475,7 +1659,7 @@ export async function executeBenchmarkRun(
       if (current.status === "awaiting_human_critique") {
         return current;
       }
-      if (["partial", "canceled", "dead_lettered", "error"].includes(current.status)) {
+      if (["partial", "canceled", "dead_lettered", "error", "paused"].includes(current.status)) {
         return current;
       }
     }
@@ -1497,7 +1681,7 @@ export async function executeBenchmarkRun(
 
     if (current.checkpoint.stage === "revise") {
       current = await runRevisionStage(current, controls);
-      if (["partial", "canceled", "dead_lettered", "error"].includes(current.status)) {
+      if (["partial", "canceled", "dead_lettered", "error", "paused"].includes(current.status)) {
         return current;
       }
     }

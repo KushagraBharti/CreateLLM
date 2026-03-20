@@ -1,20 +1,25 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { useParams } from "next/navigation";
+import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import { motion } from "framer-motion";
 import { BenchmarkRun } from "@/types";
 import ResultsView from "@/components/results/ResultsView";
 import { StatusBadge } from "@/components/ui/Badge";
 import { SkeletonCard } from "@/components/ui/Skeleton";
+import { useBenchmarkSSE } from "@/hooks/useBenchmarkSSE";
+import ArenaRunner from "@/components/arena/ArenaRunner";
+import HumanCritiquePanel from "@/components/arena/HumanCritiquePanel";
 
 export default function BenchmarkDetailPage() {
   const params = useParams();
+  const router = useRouter();
   const id = params.id as string;
   const [run, setRun] = useState<BenchmarkRun | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const live = useBenchmarkSSE();
 
   useEffect(() => {
     async function load() {
@@ -23,7 +28,9 @@ export default function BenchmarkDetailPage() {
         if (!response.ok) {
           throw new Error(response.status === 404 ? "Benchmark not found" : "Failed to load");
         }
-        setRun(await response.json());
+        const payload = (await response.json()) as BenchmarkRun;
+        setRun(payload);
+        live.attachToRun(payload);
       } catch (err) {
         setError(err instanceof Error ? err.message : "Failed to load benchmark");
       } finally {
@@ -32,6 +39,8 @@ export default function BenchmarkDetailPage() {
     }
     load();
   }, [id]);
+
+  const activeRun = live.result ?? run;
 
   return (
     <div className="max-w-5xl mx-auto px-6 py-8">
@@ -67,15 +76,54 @@ export default function BenchmarkDetailPage() {
             Browse all benchmarks
           </Link>
         </motion.div>
-      ) : run ? (
+      ) : activeRun ? (
         <motion.div
           initial={{ opacity: 0, y: 16 }}
           animate={{ opacity: 1, y: 0 }}
         >
           <div className="mb-6">
-            <StatusBadge status={run.status} />
+            <StatusBadge status={activeRun.status} />
           </div>
-          <ResultsView run={run} />
+          {activeRun && (
+            <div className="mb-8 space-y-6">
+              <ArenaRunner
+                status={activeRun.status}
+                step={activeRun.currentStep}
+                run={activeRun}
+                onPauseRun={() => live.pauseBenchmark()}
+                onResumeRun={() => live.resumeBenchmark()}
+                onCancelRun={() => live.cancelBenchmark()}
+                onRestartRun={async () => {
+                  const next = await live.restartBenchmark();
+                  if (next?.id && next.id !== id) {
+                    router.push(`/arena/${next.id}`);
+                  }
+                }}
+                onPauseModel={(modelId) => live.pauseModel(modelId)}
+                onResumeModel={(modelId) => live.resumeModel(modelId)}
+                onRetryModel={(modelId) => live.retryModel(modelId)}
+                onCancelModel={(modelId) => live.cancelModel(modelId)}
+              />
+              {activeRun.status === "awaiting_human_critique" && (
+                <HumanCritiquePanel
+                  run={activeRun}
+                  onSubmit={async (critiques) => {
+                    await live.submitHumanCritiques(critiques);
+                  }}
+                  onProceed={async () => {
+                    await live.proceedBenchmark();
+                  }}
+                />
+              )}
+            </div>
+          )}
+          <ResultsView
+            run={activeRun}
+            isLive={live.isRunning}
+            streamingText={live.streamingText}
+            toolActivity={live.toolActivity}
+            reasoningActivity={live.reasoningActivity}
+          />
         </motion.div>
       ) : null}
     </div>
