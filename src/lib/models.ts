@@ -62,7 +62,7 @@ const curatedCatalog: ModelCatalogEntry[] = [
     personality: "The closer. Expensive, deliberate, and built for hard problems.",
     color: "#8f82b8",
     initial: "Co",
-    defaultEnabled: false,
+    defaultEnabled: true,
     active: true,
   },
   {
@@ -77,7 +77,7 @@ const curatedCatalog: ModelCatalogEntry[] = [
     personality: "The editor. Refined, careful, and annoyingly articulate.",
     color: "#a190b8",
     initial: "Cs",
-    defaultEnabled: true,
+    defaultEnabled: false,
     active: true,
   },
   {
