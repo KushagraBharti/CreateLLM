@@ -41,12 +41,13 @@ export const benchmarkPromptCopy = {
       "Differentiate clearly between ideas. If one is significantly better, the scores should reflect that gap.",
     ],
     reviewerIntro:
-      "You are reviewing ideas from anonymous models. You should judge purely on merit. These ideas were created independently, and they do not have knowledge of each other. Do not try to find connections or patterns between the ideas. Instead, evaluate each idea on its own merits.",
+      "You are reviewing ideas from anonymous models. You should judge purely on merit. These ideas were created independently, and they do not have knowledge of each other. Do not try to find connections or patterns between the ideas. Instead, evaluate each idea on its own merits. Some ideas may include recency-sensitive claims informed by live web search. You may not have access to that same live context, so do not penalize an idea solely because it references timely facts you cannot independently verify.",
     taskLines: [
       "Critique each of the ideas above. Then rate them, and rank them from best to worst.",
     ],
     rules: [
       "For each idea, provide specific, constructive feedback on its strengths, weaknesses, and suggestions for improvement. Be brutally honest but also constructive and specific.",
+      "When an idea uses recent market, company, regulatory, or technical details, judge whether those claims are coherent, strategically relevant, and plausibly support the proposal rather than penalizing the idea for freshness alone.",
       "Be concise and information-dense; keep critiques and reasoning tight without losing judgment quality. Avoid repetition, filler, and unnecessary hedging.",
       "Do NOT use markdown fences. Return a single JSON object only",
       "Every property value must be valid JSON",
@@ -60,6 +61,7 @@ export const benchmarkPromptCopy = {
       "You are participating in a novelty benchmark. You previously submitted an idea that received anonymous critiques. Your goal was to produce the most novel, creative, and well-thought-out response possible. You were tasked with truly thinking things through, and explaining your idea the best you can, making sure to fully flesh out your idea with details and specifics. Now, your task is to revise and significantly improve your idea based on the feedback.",
     instructions: [
       "Carefully consider all feedback. Read through and understand it well. Then revise your original idea to make it significantly better based on the feedback. Address the weaknesses identified and incorporate the best suggestions.",
+      "Some critiques may underweight or question timely claims because the judges may not have had access to the same live web context you had. Preserve or sharpen those claims when they materially strengthen the idea, but keep them specific, plausible, and strategically relevant.",
       "Here's the original instructions you were given:",
       "Be as novel, original, thorough, and ensure correctness. Think outside the box and propose truly unique ideas.",
       "Be specific, detailed, and explain your idea extremely well.",
@@ -99,8 +101,9 @@ export const benchmarkPromptCopy = {
       "Differentiate clearly between ideas. If one is significantly better, the scores should reflect that gap.",
     ],
     reviewerIntro:
-      "These are REVISED ideas from anonymous models. Judge purely on merit.",
+      "These are REVISED ideas from anonymous models. Judge purely on merit. Some ideas may include recency-sensitive claims informed by live web search. You may not have access to that same live context, so do not penalize an idea solely because it references timely facts you cannot independently verify.",
     rules: [
+      "When an idea uses recent market, company, regulatory, or technical details, judge whether those claims are coherent, strategically relevant, and plausibly support the proposal rather than penalizing the idea for freshness alone.",
       "Be concise and information-dense; use only the tokens needed to be clear, complete, and persuasive. Prefer tight wording over repetition, throat-clearing, or unnecessary elaboration.",
       "Provide well-thought out reasoning to defend your rating and reasoning.",
       "DO NOT use markdown fences. Return a single JSON object only",

@@ -44,7 +44,7 @@ export default function LeaderboardClient({ data }: { data: LeaderboardData }) {
           { label: "Runs", value: totalRuns },
           { label: "Ideas", value: data.totals.ideas },
           { label: "Leader", displayText: topModel?.modelName ?? "—" },
-          { label: "Top Score", value: topModel?.averageScore ?? 0, decimals: 1 },
+          { label: "Top Composite", value: topModel?.compositeScore ?? 0, decimals: 1 },
         ].map((stat) => (
           <div key={stat.label} className="bg-bg-deep p-5">
             <span className="label block mb-2">{stat.label}</span>
@@ -73,13 +73,13 @@ export default function LeaderboardClient({ data }: { data: LeaderboardData }) {
         <RankingsTable
           entries={data.global}
           title="Global Leaderboard"
-          subtitle={`Based on ${totalRuns} benchmark${totalRuns === 1 ? "" : "s"}`}
+          subtitle={`Composite standing built from final placements, final ratings, and critique ratings across ${totalRuns} benchmark${totalRuns === 1 ? "" : "s"}`}
         />
       ) : (
         <RankingsTable
           entries={data.byCategory[selectedCategory] || []}
           title={`${selectedCategory.charAt(0).toUpperCase() + selectedCategory.slice(1)} Leaderboard`}
-          subtitle={`${getCategoryRuns(selectedCategory)} runs in this category`}
+          subtitle={`Composite standing across ${getCategoryRuns(selectedCategory)} run${getCategoryRuns(selectedCategory) === 1 ? "" : "s"} in this category`}
         />
       )}
     </motion.div>

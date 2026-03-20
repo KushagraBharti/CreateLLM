@@ -39,13 +39,13 @@ export default function RankingsTable({
 
       <div className="border-t border-border">
         {/* Header */}
-        <div className="grid grid-cols-[40px_1fr_60px_70px_70px_60px_50px] gap-2 py-2 label">
+        <div className="grid grid-cols-[40px_minmax(0,1.2fr)_88px_74px_82px_56px_50px] gap-3 py-2 label">
           <span>#</span>
           <span>Model</span>
+          <span className="text-right">Composite</span>
+          <span className="text-right">Final</span>
+          <span className="text-right">Finish</span>
           <span className="text-right">Wins</span>
-          <span className="text-right">Win %</span>
-          <span className="text-right">Score</span>
-          <span className="text-right">Rank</span>
           <span className="text-right">Runs</span>
         </div>
 
@@ -63,7 +63,7 @@ export default function RankingsTable({
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
               transition={{ delay: i * 0.06 }}
-              className="grid grid-cols-[40px_1fr_60px_70px_70px_60px_50px] gap-2 py-3 border-t border-border/50 items-center"
+              className="grid grid-cols-[40px_minmax(0,1.2fr)_88px_74px_82px_56px_50px] gap-3 py-3 border-t border-border/50 items-center"
             >
               {/* Place */}
               <span className="font-mono text-base text-text-muted">
@@ -86,34 +86,37 @@ export default function RankingsTable({
                 </div>
               </div>
 
-              {/* Wins */}
-              <span className="font-mono text-base text-right" style={{ color: "#6BBF7B" }}>
-                {entry.wins}
-              </span>
-
-              {/* Win Rate */}
-              <span className="font-mono text-base text-text-secondary text-right">
-                {winRate}%
-              </span>
-
-              {/* Avg Score */}
+              {/* Composite */}
               <span
                 className="font-mono text-base font-medium text-right"
                 style={{
                   color:
-                    entry.averageScore >= 7
+                    entry.compositeScore >= 70
                       ? "#6BBF7B"
-                      : entry.averageScore >= 5
+                      : entry.compositeScore >= 50
                         ? "#C9A84C"
                         : "#C75050",
                 }}
               >
-                {entry.averageScore.toFixed(1)}
+                {entry.compositeScore.toFixed(1)}
               </span>
 
-              {/* Avg Rank */}
+              {/* Avg Final Score */}
               <span className="font-mono text-base text-text-secondary text-right">
-                {entry.averageRank.toFixed(2)}
+                {entry.averageFinalScore.toFixed(1)}
+              </span>
+
+              {/* Avg Finish */}
+              <span className="font-mono text-base text-text-secondary text-right">
+                #{entry.averageFinalRank.toFixed(2)}
+              </span>
+
+              {/* Wins */}
+              <span className="text-right">
+                <span className="font-mono text-base" style={{ color: "#6BBF7B" }}>
+                  {entry.wins}
+                </span>
+                <span className="block font-mono text-[11px] text-text-muted">{winRate}%</span>
               </span>
 
               {/* Runs */}

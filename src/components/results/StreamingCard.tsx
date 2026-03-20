@@ -1,5 +1,6 @@
 "use client";
 
+import { useMemo, useState } from "react";
 import { motion } from "framer-motion";
 import { getModelIdentity } from "@/utils/model-identity";
 
@@ -26,6 +27,24 @@ interface StreamingCardProps {
   }>;
 }
 
+type ActivityEntry =
+  | {
+      kind: "reasoning";
+      key: string;
+      title: string;
+      meta: string;
+      tone: "neutral" | "warning";
+      body: string;
+    }
+  | {
+      kind: "tool";
+      key: string;
+      title: string;
+      meta: string;
+      tone: "accent" | "warning";
+      body: string[];
+    };
+
 export default function StreamingCard({
   modelId,
   text,
@@ -34,155 +53,198 @@ export default function StreamingCard({
   toolEntries = [],
 }: StreamingCardProps) {
   const model = getModelIdentity(modelId);
+  const [openEntryId, setOpenEntryId] = useState<string | null>(null);
+
+  const activityEntries = useMemo<ActivityEntry[]>(() => {
+    const reasoning = reasoningEntries.map((entry) => {
+      const isEncrypted = entry.detailType === "reasoning.encrypted";
+      const body = entry.detailType === "reasoning.summary"
+        ? entry.summary || "Reasoning summary received."
+        : isEncrypted
+          ? "Reasoning was used for this turn, but the provider only returned encrypted reasoning details."
+          : entry.text || "Reasoning details received.";
+
+      return {
+        kind: "reasoning" as const,
+        key: entry.key,
+        title:
+          entry.detailType === "reasoning.summary"
+            ? "Reasoning summary available"
+            : isEncrypted
+              ? "Reasoning used"
+              : "Reasoning streamed",
+        meta: entry.format ?? "reasoning",
+        tone: isEncrypted ? "warning" as const : "neutral" as const,
+        body,
+      };
+    });
+
+    const tools = toolEntries.map((entry) => {
+      const lines: string[] = [];
+      if (entry.query) lines.push(`Query: ${entry.query}`);
+      if (typeof entry.resultCount === "number") {
+        lines.push(`${entry.resultCount} source${entry.resultCount === 1 ? "" : "s"} returned`);
+      }
+      if (entry.urls?.length) {
+        lines.push(...entry.urls.map((url) => `Source: ${url}`));
+      }
+      if (entry.error) lines.push(`Error: ${entry.error}`);
+
+      return {
+        kind: "tool" as const,
+        key: entry.key,
+        title:
+          entry.state === "failed"
+            ? `${entry.toolName} tool failed`
+            : entry.state === "completed"
+              ? `${entry.toolName} tool called`
+              : `${entry.toolName} tool called`,
+        meta:
+          entry.state === "completed"
+            ? "completed"
+            : entry.state === "failed"
+              ? "failed"
+              : "running",
+        tone: entry.state === "failed" ? "warning" as const : "accent" as const,
+        body: lines.length > 0 ? lines : ["Waiting for search results..."],
+      };
+    });
+
+    return [...reasoning, ...tools];
+  }, [reasoningEntries, toolEntries]);
+
+  const stageLabel = stage === "generate" ? "generating" : "revising";
+  const hasOutput = text.trim().length > 0;
 
   return (
     <motion.div
       initial={{ opacity: 0, y: 8 }}
       animate={{ opacity: 1, y: 0 }}
-      className="border border-border rounded-lg p-5 bg-bg-surface/30"
+      className="overflow-hidden rounded-2xl border border-border bg-bg-surface/45"
     >
-      {/* Header */}
-      <div className="flex items-center gap-2 mb-4">
-        <span
-          className="w-2 h-2 rounded-full flex-shrink-0"
-          style={{
-            backgroundColor: model.color,
-            animation: "pulse-dot 1.5s ease-in-out infinite",
-          }}
-        />
-        <span className="text-base font-medium text-text-primary">{model.name}</span>
-        <span className="label ml-auto">
-          {stage === "generate" ? "generating" : "revising"}
-        </span>
+      <div className="border-b border-border/70 px-5 py-4">
+        <div className="flex items-center gap-2.5">
+          <span
+            className="h-2 w-2 rounded-full flex-shrink-0"
+            style={{
+              backgroundColor: model.color,
+              animation: "pulse-dot 1.5s ease-in-out infinite",
+            }}
+          />
+          <div className="min-w-0">
+            <p className="text-base font-medium text-text-primary">{model.name}</p>
+            <p className="font-mono text-[11px] uppercase tracking-[0.22em] text-text-muted">
+              {stageLabel}
+            </p>
+          </div>
+          <div className="ml-auto text-right">
+            <p className="label">Live Draft</p>
+            <p className="text-sm text-text-muted">
+              {hasOutput ? "Streaming proposal output" : "Preparing response"}
+            </p>
+          </div>
+        </div>
       </div>
 
-      {reasoningEntries.length > 0 && (
-        <div className="mb-4 space-y-2">
-          {reasoningEntries.map((entry) => {
-            const summaryLabel =
-              entry.detailType === "reasoning.summary"
-                ? "reasoning summary streamed"
-                : entry.detailType === "reasoning.encrypted"
-                  ? "reasoning streamed"
-                  : "reasoning streamed";
-            const body =
-              entry.detailType === "reasoning.summary"
-                ? entry.summary
-                : entry.detailType === "reasoning.encrypted"
-                  ? "[encrypted reasoning]"
-                  : entry.text;
-
-            return (
-              <details
-                key={entry.key}
-                className="group rounded-lg border border-border/70 bg-bg-surface/45"
-              >
-                <summary className="flex cursor-pointer list-none items-center gap-3 px-3 py-2 text-sm text-text-secondary transition-colors hover:text-text-primary">
-                  <span className="w-1.5 h-1.5 rounded-full bg-text-muted/80" />
-                  <span className="text-text-primary">{summaryLabel}</span>
-                  <span className="ml-auto font-mono uppercase tracking-[0.18em] text-[11px] text-text-muted">
-                    {entry.format ?? "reasoning"}
-                  </span>
-                </summary>
-
-                <div className="border-t border-border/60 px-3 py-3 text-sm text-text-secondary">
-                  {body ? (
-                    <pre className="whitespace-pre-wrap break-words font-mono text-[13px] leading-relaxed text-text-secondary">
-                      {body}
-                    </pre>
-                  ) : (
-                    <p className="text-text-muted">Reasoning received.</p>
-                  )}
-                </div>
-              </details>
-            );
-          })}
+      <div className="space-y-4 px-5 py-5">
+        <div className="rounded-2xl border border-border/70 bg-bg-deep/65 p-4">
+          {hasOutput ? (
+            <pre className="max-h-72 overflow-auto whitespace-pre-wrap break-words pr-1 font-mono text-[13px] leading-7 text-text-secondary">
+              {text}
+              <span
+                className="ml-px inline-block h-[1em] w-0.5 align-middle"
+                style={{
+                  backgroundColor: "var(--color-accent)",
+                  animation: "pulse-dot 1s ease-in-out infinite",
+                }}
+              />
+            </pre>
+          ) : (
+            <div className="flex min-h-[92px] flex-col justify-center">
+              <p className="label mb-2">Draft Queue</p>
+              <div className="flex items-center gap-2">
+                {[0, 0.18, 0.36].map((delay, index) => (
+                  <span
+                    key={index}
+                    className="h-1.5 w-1.5 rounded-full bg-text-muted/40"
+                    style={{ animation: `pulse-dot 1.2s ease-in-out ${delay}s infinite` }}
+                  />
+                ))}
+                <span className="text-sm text-text-muted">
+                  {activityEntries.length > 0
+                    ? "The model is thinking, searching, or gathering context."
+                    : "The model has the prompt and is starting its first draft."}
+                </span>
+              </div>
+            </div>
+          )}
         </div>
-      )}
 
-      {toolEntries.length > 0 && (
-        <div className="mb-4 space-y-2">
-          {toolEntries.map((entry) => {
-            const summaryLabel =
-              entry.state === "failed"
-                ? `${entry.toolName} tool failed`
-                : `${entry.toolName} tool called`;
+        {activityEntries.length > 0 && (
+          <div className="rounded-2xl border border-border/60 bg-bg-surface/40">
+            <div className="border-b border-border/60 px-4 py-3">
+              <p className="label">Activity</p>
+              <p className="text-sm text-text-muted">
+                Reasoning and search events appear here as they happen.
+              </p>
+            </div>
 
-            return (
-              <details
-                key={entry.key}
-                className="group rounded-lg border border-border/70 bg-bg-surface/45"
-              >
-                <summary className="flex cursor-pointer list-none items-center gap-3 px-3 py-2 text-sm text-text-secondary transition-colors hover:text-text-primary">
-                  <span className="w-1.5 h-1.5 rounded-full bg-accent/80" />
-                  <span className="text-text-primary">{summaryLabel}</span>
-                  <span className="ml-auto font-mono uppercase tracking-[0.18em] text-[11px] text-text-muted">
-                    {entry.state}
-                  </span>
-                </summary>
+            <div className="divide-y divide-border/50">
+              {activityEntries.map((entry) => {
+                const isOpen = openEntryId === entry.key;
+                const accentClass =
+                  entry.tone === "warning"
+                    ? "bg-[#C87A7A]"
+                    : entry.tone === "accent"
+                      ? "bg-accent"
+                      : "bg-text-muted/75";
 
-                <div className="border-t border-border/60 px-3 py-3 text-sm text-text-secondary">
-                  {entry.query && (
-                    <p className="leading-relaxed">
-                      <span className="label mr-2">Query</span>
-                      {entry.query}
-                    </p>
-                  )}
-                  {typeof entry.resultCount === "number" && entry.resultCount > 0 && (
-                    <p className="mt-2 text-text-muted">
-                      {entry.resultCount} source{entry.resultCount === 1 ? "" : "s"} returned
-                    </p>
-                  )}
-                  {entry.urls && entry.urls.length > 0 && (
-                    <div className="mt-2 space-y-1">
-                      {entry.urls.map((url) => (
-                        <a
-                          key={url}
-                          href={url}
-                          target="_blank"
-                          rel="noreferrer"
-                          className="block truncate text-text-secondary transition-colors hover:text-accent"
-                        >
-                          {url}
-                        </a>
-                      ))}
-                    </div>
-                  )}
-                  {entry.error && (
-                    <p className="mt-2 leading-relaxed text-[#C87A7A]">{entry.error}</p>
-                  )}
-                </div>
-              </details>
-            );
-          })}
-        </div>
-      )}
+                return (
+                  <div key={entry.key} className="px-4 py-3">
+                    <button
+                      type="button"
+                      onClick={() => setOpenEntryId(isOpen ? null : entry.key)}
+                      className="flex w-full items-start gap-3 text-left"
+                    >
+                      <span className={`mt-1.5 h-1.5 w-1.5 rounded-full flex-shrink-0 ${accentClass}`} />
+                      <div className="min-w-0 flex-1">
+                        <p className="text-sm text-text-primary">{entry.title}</p>
+                        <p className="font-mono text-[11px] uppercase tracking-[0.18em] text-text-muted">
+                          {entry.meta}
+                        </p>
+                      </div>
+                      <span className="text-sm text-text-muted">
+                        {isOpen ? "Hide" : "Show"}
+                      </span>
+                    </button>
 
-      {/* Content */}
-      {text ? (
-        <div className="relative max-h-52 overflow-hidden">
-          <pre className="text-base text-text-secondary font-mono whitespace-pre-wrap break-words leading-relaxed">
-            {text}
-            <span
-              className="inline-block w-0.5 h-[1em] bg-accent align-middle ml-px"
-              style={{ animation: "pulse-dot 1s ease-in-out infinite" }}
-            />
-          </pre>
-          {/* Fade at bottom to indicate there may be more */}
-          <div className="absolute bottom-0 left-0 right-0 h-10 bg-gradient-to-t from-bg-deep to-transparent pointer-events-none" />
-        </div>
-      ) : (
-        /* Thinking dots */
-        <div className="flex gap-1.5 items-center h-8">
-          {[0, 0.2, 0.4].map((delay, i) => (
-            <span
-              key={i}
-              className="w-1.5 h-1.5 rounded-full bg-text-muted/40"
-              style={{ animation: `pulse-dot 1.2s ease-in-out ${delay}s infinite` }}
-            />
-          ))}
-        </div>
-      )}
+                    {isOpen && (
+                      <div className="ml-[18px] mt-3 rounded-xl border border-border/60 bg-bg-deep/70 px-4 py-3">
+                        {entry.kind === "reasoning" ? (
+                          <p className="whitespace-pre-wrap break-words text-sm leading-relaxed text-text-secondary">
+                            {entry.body}
+                          </p>
+                        ) : (
+                          <div className="space-y-2">
+                            {entry.body.map((line) => (
+                              <p
+                                key={line}
+                                className="whitespace-pre-wrap break-words text-sm leading-relaxed text-text-secondary"
+                              >
+                                {line}
+                              </p>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+      </div>
     </motion.div>
   );
 }

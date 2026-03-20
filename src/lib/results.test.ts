@@ -62,6 +62,22 @@ describe("results loaders", () => {
       checkpoint: { stage: "complete", completedModelIds: ["a", "b"], readyForRevisionModelIds: ["a", "b"], updatedAt: new Date().toISOString() },
       cancellation: { requested: false },
       circuitBreaker: { status: "closed", failureCount: 0 },
+      web: {
+        config: {
+          maxSearchCallsPerStagePerModel: 2,
+          maxResultsPerSearch: 3,
+          maxCharsPerResult: 12000,
+          perCallTimeoutMs: 10000,
+          totalStageBudgetMs: 30000,
+          maxLoopTurns: 5,
+        },
+        toolCalls: [],
+        retrievedSources: [],
+        usage: [],
+      },
+      reasoning: {
+        details: [],
+      },
       metadata: { participantCount: 2, minimumSuccessfulModels: 2 },
     };
 

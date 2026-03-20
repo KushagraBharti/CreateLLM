@@ -327,9 +327,11 @@ export interface LeaderboardEntry {
   provider: string;
   wins: number;
   totalRuns: number;
-  averageScore: number;
-  averageRank: number;
+  compositeScore: number;
+  averageFinalScore: number;
+  averageFinalRank: number;
   averageCritiqueScore: number;
+  averageFinishPercentile: number;
 }
 
 export interface AggregatedScore {

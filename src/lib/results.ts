@@ -2,68 +2,116 @@ import { getModelIdentity } from "@/utils/model-identity";
 import { BenchmarkRun, BenchmarkRunSummary, LeaderboardData, LeaderboardEntry } from "@/types";
 import { listBenchmarkRunSummaries, listBenchmarkRuns } from "./storage";
 
+const FINAL_RANK_WEIGHT = 0.6;
+const FINAL_SCORE_WEIGHT = 0.25;
+const CRITIQUE_SCORE_WEIGHT = 0.15;
+
+function average(values: number[]): number {
+  if (values.length === 0) return 0;
+  return values.reduce((sum, value) => sum + value, 0) / values.length;
+}
+
+function rankToPercentile(rank: number, participantCount: number): number {
+  if (participantCount <= 1) return 1;
+  return (participantCount - rank) / (participantCount - 1);
+}
+
 function buildLeaderboard(runs: BenchmarkRun[]): LeaderboardEntry[] {
   const stats = new Map<
     string,
     {
-      totalRank: number;
-      totalScore: number;
-      totalCritiqueScore: number;
-      critiqueCount: number;
       wins: number;
       runCount: number;
+      compositeTotal: number;
+      finalScoreTotal: number;
+      finalRankTotal: number;
+      finishPercentileTotal: number;
+      critiqueScoreTotal: number;
+      critiqueCount: number;
     }
   >();
 
   for (const run of runs) {
     if (run.finalRankings.length === 0) continue;
 
-    const candidateIds = run.revisedIdeas.map((idea) => idea.modelId);
-    const modelScores = new Map<string, { totalRank: number; totalScore: number; judgeCount: number }>();
+    const candidateIds = Array.from(
+      new Set([
+        ...run.revisedIdeas.map((idea) => idea.modelId),
+        ...run.finalRankings.flatMap((ranking) => ranking.rankings.map((entry) => entry.modelId)),
+      ])
+    );
+    if (candidateIds.length === 0) continue;
+
+    const participantCount = candidateIds.length;
+    const perModelFinals = new Map<string, { ranks: number[]; scores: number[] }>();
 
     for (const ranking of run.finalRankings) {
       for (const entry of ranking.rankings) {
         if (!candidateIds.includes(entry.modelId)) continue;
-        const existing = modelScores.get(entry.modelId) ?? { totalRank: 0, totalScore: 0, judgeCount: 0 };
-        existing.totalRank += entry.rank;
-        existing.totalScore += entry.score;
-        existing.judgeCount += 1;
-        modelScores.set(entry.modelId, existing);
+        const existing = perModelFinals.get(entry.modelId) ?? { ranks: [], scores: [] };
+        existing.ranks.push(entry.rank);
+        existing.scores.push(entry.score);
+        perModelFinals.set(entry.modelId, existing);
       }
     }
 
     let winnerId = "";
     let bestAverageRank = Number.POSITIVE_INFINITY;
-    for (const [modelId, score] of modelScores) {
-      const averageRank = score.judgeCount > 0 ? score.totalRank / score.judgeCount : Number.POSITIVE_INFINITY;
-      if (averageRank < bestAverageRank) {
-        bestAverageRank = averageRank;
+    let bestAverageScore = Number.NEGATIVE_INFINITY;
+
+    for (const modelId of candidateIds) {
+      const result = perModelFinals.get(modelId);
+      if (!result || result.ranks.length === 0) continue;
+      const averageRank = average(result.ranks);
+      const averageScore = average(result.scores);
+
+      if (
+        averageRank < bestAverageRank ||
+        (averageRank === bestAverageRank && averageScore > bestAverageScore)
+      ) {
         winnerId = modelId;
+        bestAverageRank = averageRank;
+        bestAverageScore = averageScore;
       }
     }
 
     for (const modelId of candidateIds) {
-      const ranking = modelScores.get(modelId);
-      if (!ranking || ranking.judgeCount === 0) continue;
+      const finals = perModelFinals.get(modelId);
+      if (!finals || finals.ranks.length === 0) continue;
 
+      const averageFinalRank = average(finals.ranks);
+      const averageFinalScore = average(finals.scores);
+      const finishPercentile = rankToPercentile(averageFinalRank, participantCount);
       const critiqueScores = run.critiqueVotes.flatMap((vote) =>
-        vote.critiques.filter((critique) => critique.targetModelId === modelId).map((critique) => critique.score)
+        vote.critiques
+          .filter((critique) => critique.targetModelId === modelId)
+          .map((critique) => critique.score)
       );
+      const critiqueAverage = average(critiqueScores);
+      const compositeScore =
+        (finishPercentile * FINAL_RANK_WEIGHT +
+          (averageFinalScore / 10) * FINAL_SCORE_WEIGHT +
+          (critiqueAverage / 10) * CRITIQUE_SCORE_WEIGHT) *
+        100;
 
       const entry = stats.get(modelId) ?? {
-        totalRank: 0,
-        totalScore: 0,
-        totalCritiqueScore: 0,
-        critiqueCount: 0,
         wins: 0,
         runCount: 0,
+        compositeTotal: 0,
+        finalScoreTotal: 0,
+        finalRankTotal: 0,
+        finishPercentileTotal: 0,
+        critiqueScoreTotal: 0,
+        critiqueCount: 0,
       };
 
-      entry.totalRank += ranking.totalRank / ranking.judgeCount;
-      entry.totalScore += ranking.totalScore / ranking.judgeCount;
-      entry.totalCritiqueScore += critiqueScores.reduce((sum, score) => sum + score, 0);
-      entry.critiqueCount += critiqueScores.length;
       entry.runCount += 1;
+      entry.compositeTotal += compositeScore;
+      entry.finalScoreTotal += averageFinalScore;
+      entry.finalRankTotal += averageFinalRank;
+      entry.finishPercentileTotal += finishPercentile;
+      entry.critiqueScoreTotal += critiqueScores.reduce((sum, score) => sum + score, 0);
+      entry.critiqueCount += critiqueScores.length;
       if (modelId === winnerId) entry.wins += 1;
       stats.set(modelId, entry);
     }
@@ -78,12 +126,20 @@ function buildLeaderboard(runs: BenchmarkRun[]): LeaderboardEntry[] {
         provider: identity.provider,
         wins: stat.wins,
         totalRuns: stat.runCount,
-        averageScore: stat.runCount > 0 ? stat.totalScore / stat.runCount : 0,
-        averageRank: stat.runCount > 0 ? stat.totalRank / stat.runCount : 0,
-        averageCritiqueScore: stat.critiqueCount > 0 ? stat.totalCritiqueScore / stat.critiqueCount : 0,
+        compositeScore: stat.runCount > 0 ? stat.compositeTotal / stat.runCount : 0,
+        averageFinalScore: stat.runCount > 0 ? stat.finalScoreTotal / stat.runCount : 0,
+        averageFinalRank: stat.runCount > 0 ? stat.finalRankTotal / stat.runCount : 0,
+        averageCritiqueScore: stat.critiqueCount > 0 ? stat.critiqueScoreTotal / stat.critiqueCount : 0,
+        averageFinishPercentile: stat.runCount > 0 ? stat.finishPercentileTotal / stat.runCount : 0,
       };
     })
-    .sort((a, b) => a.averageRank - b.averageRank || b.averageScore - a.averageScore);
+    .sort(
+      (a, b) =>
+        b.compositeScore - a.compositeScore ||
+        a.averageFinalRank - b.averageFinalRank ||
+        b.averageFinalScore - a.averageFinalScore ||
+        b.wins - a.wins
+    );
 }
 
 export async function getArchiveSummaries(): Promise<BenchmarkRunSummary[]> {
