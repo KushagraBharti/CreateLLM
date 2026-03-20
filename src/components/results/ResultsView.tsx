@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { motion } from "framer-motion";
 import { BenchmarkRun } from "@/types";
-import { LiveToolActivity } from "@/hooks/useBenchmarkSSE";
+import { LiveReasoningActivity, LiveToolActivity } from "@/hooks/useBenchmarkSSE";
 import { getModelName } from "@/lib/models";
 import { getModelIdentity, getModelOrder } from "@/utils/model-identity";
 import Tabs, { TabItem } from "@/components/ui/Tabs";
@@ -20,9 +20,16 @@ interface ResultsViewProps {
   isLive?: boolean;
   streamingText?: Record<string, string>;
   toolActivity?: Record<string, LiveToolActivity>;
+  reasoningActivity?: Record<string, LiveReasoningActivity>;
 }
 
-export default function ResultsView({ run, isLive, streamingText = {}, toolActivity = {} }: ResultsViewProps) {
+export default function ResultsView({
+  run,
+  isLive,
+  streamingText = {},
+  toolActivity = {},
+  reasoningActivity = {},
+}: ResultsViewProps) {
   const [activeTab, setActiveTab] = useState("ideas");
   const [critiqueFilter, setCritiqueFilter] = useState<string | null>(null);
   const prevStatusRef = useRef<string | null>(null);
@@ -60,6 +67,7 @@ export default function ResultsView({ run, isLive, streamingText = {}, toolActiv
   }, [run.critiqueVotes, run.humanCritiques]);
   const hasSearchActivity = run.web.toolCalls.length > 0 || Object.keys(toolActivity).length > 0;
   const liveSearchEntries = Object.values(toolActivity);
+  const liveReasoningEntries = Object.values(reasoningActivity);
 
   const getStreamingToolEntries = useMemo(() => {
     return (modelId: string, stage: "generate" | "revise") => {
@@ -107,6 +115,57 @@ export default function ResultsView({ run, isLive, streamingText = {}, toolActiv
     };
   }, [liveSearchEntries, run.web.toolCalls]);
 
+  const getStreamingReasoningEntries = useMemo(() => {
+    return (modelId: string, stage: "generate" | "revise") => {
+      const merged = new Map<
+        string,
+        {
+          key: string;
+          detailType: "reasoning.summary" | "reasoning.encrypted" | "reasoning.text";
+          text?: string;
+          summary?: string;
+          data?: string;
+          format?: string;
+          index?: number;
+        }
+      >();
+
+      for (const detail of run.reasoning.details) {
+        if (detail.modelId !== modelId || detail.stage !== stage) continue;
+        merged.set(detail.id, {
+          key: detail.id,
+          detailType: detail.type,
+          text: detail.text,
+          summary: detail.summary,
+          data: detail.data,
+          format: detail.format,
+          index: detail.index,
+        });
+      }
+
+      for (const detail of liveReasoningEntries) {
+        if (detail.modelId !== modelId || detail.stage !== stage) continue;
+        const existing = merged.get(detail.detailId);
+        merged.set(detail.detailId, {
+          key: detail.detailId,
+          detailType: detail.detailType,
+          text: detail.text ?? existing?.text,
+          summary: detail.summary ?? existing?.summary,
+          data: detail.data ?? existing?.data,
+          format: detail.format ?? existing?.format,
+          index: detail.index ?? existing?.index,
+        });
+      }
+
+      return Array.from(merged.values()).sort((a, b) => {
+        if (a.index !== undefined && b.index !== undefined && a.index !== b.index) {
+          return a.index - b.index;
+        }
+        return a.key.localeCompare(b.key);
+      });
+    };
+  }, [liveReasoningEntries, run.reasoning.details]);
+
   const tabs: TabItem[] = [
     { id: "ideas", label: "Ideas", count: run.ideas.length, available: run.ideas.length > 0 },
     { id: "critiques", label: "Critiques", count: run.critiqueVotes.length + run.humanCritiques.length, available: run.critiqueVotes.length > 0 || run.humanCritiques.length > 0 },
@@ -149,6 +208,7 @@ export default function ResultsView({ run, isLive, streamingText = {}, toolActiv
                     modelId={modelId}
                     text={streamingText[modelId] ?? ""}
                     stage="generate"
+                    reasoningEntries={getStreamingReasoningEntries(modelId, "generate")}
                     toolEntries={getStreamingToolEntries(modelId, "generate")}
                   />
                 ))}
@@ -277,6 +337,7 @@ export default function ResultsView({ run, isLive, streamingText = {}, toolActiv
                     modelId={modelId}
                     text={streamingText[modelId] ?? ""}
                     stage="revise"
+                    reasoningEntries={getStreamingReasoningEntries(modelId, "revise")}
                     toolEntries={getStreamingToolEntries(modelId, "revise")}
                   />
                 ))}

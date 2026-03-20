@@ -7,6 +7,7 @@ import {
   IdeaContent,
   Ranking,
   RankingEntry,
+  ReasoningDetailRecord,
   RetrievedSourceRecord,
   RunCheckpointStage,
   RunFailureRecord,
@@ -16,12 +17,13 @@ import {
 } from "@/types";
 import {
   callModel,
-  callModelTurn,
   ChatMessage,
+  ReasoningDetail,
   ChatToolCall,
   ChatToolDefinition,
   ReasoningConfig,
   streamModel,
+  streamModelTurn,
 } from "./openrouter";
 import { getModelName } from "./models";
 import { getCategoryById } from "./categories";
@@ -123,6 +125,14 @@ function supportsToolCallingError(error: Error): boolean {
   );
 }
 
+function getEffectiveModelTimeoutMs(openRouterId: string): number {
+  if (openRouterId.startsWith("anthropic/")) {
+    return Math.max(MODEL_TIMEOUT_MS, 240_000);
+  }
+
+  return MODEL_TIMEOUT_MS;
+}
+
 function normalizeSearchArgs(rawArgs: string): SearchWebArgs {
   const parsed = JSON.parse(rawArgs) as Record<string, unknown>;
   const toStringArray = (value: unknown): string[] | undefined =>
@@ -187,6 +197,7 @@ type StageToolTrace = {
   toolCalls: ToolCallRecord[];
   retrievedSources: RetrievedSourceRecord[];
   usage: ReturnType<typeof createEmptyUsage>;
+  reasoningDetails: ReasoningDetailRecord[];
 };
 
 function createStageToolTrace(stage: WebEnabledStage, modelId: string): StageToolTrace {
@@ -194,7 +205,43 @@ function createStageToolTrace(stage: WebEnabledStage, modelId: string): StageToo
     toolCalls: [],
     retrievedSources: [],
     usage: createEmptyUsage(stage, modelId),
+    reasoningDetails: [],
   };
+}
+
+function upsertReasoningDetails(
+  existing: ReasoningDetailRecord[],
+  stage: RunCheckpointStage,
+  modelId: string,
+  details: ReasoningDetail[]
+): ReasoningDetailRecord[] {
+  const next = new Map(existing.map((detail) => [detail.id, detail]));
+  const updatedAt = new Date().toISOString();
+
+  for (const detail of details) {
+    const id = detail.id ?? `${stage}:${modelId}:${detail.type}:${detail.index ?? 0}`;
+    const prior = next.get(id);
+    next.set(id, {
+      id,
+      stage,
+      modelId,
+      type: detail.type,
+      format: detail.format ?? prior?.format,
+      index: detail.index ?? prior?.index,
+      text: `${prior?.text ?? ""}${detail.text ?? ""}` || undefined,
+      summary: `${prior?.summary ?? ""}${detail.summary ?? ""}` || undefined,
+      data: `${prior?.data ?? ""}${detail.data ?? ""}` || undefined,
+      signature: detail.signature ?? prior?.signature,
+      updatedAt,
+    });
+  }
+
+  return Array.from(next.values()).sort((a, b) => {
+    if (a.index !== undefined && b.index !== undefined && a.index !== b.index) {
+      return a.index - b.index;
+    }
+    return a.id.localeCompare(b.id);
+  });
 }
 
 function buildAnonymousMap(modelIds: string[]): Map<string, string> {
@@ -317,9 +364,10 @@ async function callModelWithJsonRetry(
   options: JsonRetryOptions = {}
 ): Promise<string> {
   const { retryOnInvalidJson = true, onBeforeRequest } = options;
+  const timeoutMs = getEffectiveModelTimeoutMs(openRouterId);
   const raw = await callModel(openRouterId, messages, {
     reasoning,
-    timeoutMs: MODEL_TIMEOUT_MS,
+    timeoutMs,
     signal,
     onBeforeRequest: (requestBody) => onBeforeRequest?.(requestBody, "initial"),
   });
@@ -335,7 +383,7 @@ async function callModelWithJsonRetry(
     ],
     {
       reasoning,
-      timeoutMs: MODEL_TIMEOUT_MS,
+      timeoutMs,
       signal,
       onBeforeRequest: (requestBody) => onBeforeRequest?.(requestBody, "retry"),
     }
@@ -349,17 +397,24 @@ async function streamModelAndCollect(
   validateFn: (raw: string) => boolean,
   signal?: AbortSignal,
   onChunk?: (chunk: string) => void,
-  options: JsonRetryOptions = {}
+  options: JsonRetryOptions & { onReasoningDetails?: (details: ReasoningDetail[]) => void } = {}
 ): Promise<string> {
-  const { acceptPartialResponse = false, retryOnInvalidJson = true, onBeforeRequest } = options;
+  const {
+    acceptPartialResponse = false,
+    retryOnInvalidJson = true,
+    onBeforeRequest,
+    onReasoningDetails,
+  } = options;
+  const timeoutMs = getEffectiveModelTimeoutMs(openRouterId);
   let accumulated = "";
 
   try {
     for await (const chunk of streamModel(openRouterId, messages, {
       reasoning,
-      timeoutMs: MODEL_TIMEOUT_MS,
+      timeoutMs,
       signal,
       onBeforeRequest: (requestBody) => onBeforeRequest?.(requestBody, "initial"),
+      onReasoningDetails,
     })) {
       accumulated += chunk;
       onChunk?.(chunk);
@@ -389,7 +444,7 @@ async function streamModelAndCollect(
     ],
     {
       reasoning,
-      timeoutMs: MODEL_TIMEOUT_MS,
+      timeoutMs,
       signal,
       onBeforeRequest: (requestBody) => onBeforeRequest?.(requestBody, "retry"),
     }
@@ -454,7 +509,6 @@ async function executeSearchToolCall(
     stage: WebEnabledStage;
     toolCall: ChatToolCall;
     turn: number;
-    stageStartMs: number;
     seenUrls: Set<string>;
     config: BenchmarkRun["web"]["config"];
     signal?: AbortSignal;
@@ -463,10 +517,6 @@ async function executeSearchToolCall(
   const stageCalls = trace.toolCalls.length;
   if (stageCalls >= params.config.maxSearchCallsPerStagePerModel) {
     throw new Error(`search_web budget exhausted for ${params.stage}`);
-  }
-
-  if (Date.now() - params.stageStartMs > params.config.totalStageBudgetMs) {
-    throw new Error(`search_web time budget exhausted for ${params.stage}`);
   }
 
   if (params.toolCall.function.name !== "search_web") {
@@ -615,9 +665,29 @@ async function runToolEnabledIdeaStage(
 ): Promise<{ raw: string; trace: StageToolTrace }> {
   const messages = [...params.initialMessages];
   const seenUrls = new Set<string>();
-  const stageStartMs = Date.now();
   const config = current.web.config;
+  const timeoutMs = getEffectiveModelTimeoutMs(params.openRouterId);
   let trace = createStageToolTrace(params.stage, params.modelId);
+  let toolLoopStartedMs: number | null = null;
+  let stopReason: string | null = null;
+  const pushReasoningDetails = (details: ReasoningDetail[]) => {
+    trace = {
+      ...trace,
+      reasoningDetails: upsertReasoningDetails(trace.reasoningDetails, params.stage, params.modelId, details),
+    };
+    for (const detail of details) {
+      getRunEventBus().publishReasoningActivity(current.id, {
+        modelId: params.modelId,
+        stage: params.stage,
+        detailId: detail.id ?? `${params.stage}:${params.modelId}:${detail.type}:${detail.index ?? 0}`,
+        detailType: detail.type,
+        format: detail.format,
+        index: detail.index,
+        text: detail.text,
+        summary: detail.summary,
+      });
+    }
+  };
 
   if (current.selectedModels.find((model) => model.id === params.modelId)?.supportsToolCalling === false) {
     const raw = await streamModelAndCollect(
@@ -642,6 +712,7 @@ async function runToolEnabledIdeaStage(
             messages,
             requestBody
           ),
+        onReasoningDetails: pushReasoningDetails,
       }
     );
     trace.usage.toolSupported = false;
@@ -650,18 +721,24 @@ async function runToolEnabledIdeaStage(
   }
 
   for (let turn = 0; turn < config.maxLoopTurns; turn++) {
-    if (Date.now() - stageStartMs > config.totalStageBudgetMs) {
+    if (
+      toolLoopStartedMs !== null &&
+      Date.now() - toolLoopStartedMs > config.totalStageBudgetMs
+    ) {
+      stopReason = `search_web tool-loop time budget exhausted for ${params.stage}`;
       break;
     }
 
     try {
-      const turnResult = await callModelTurn(params.openRouterId, messages, {
+      const turnResult = await streamModelTurn(params.openRouterId, messages, {
         reasoning: params.reasoning,
-        timeoutMs: MODEL_TIMEOUT_MS,
+        timeoutMs,
         signal: params.signal,
         tools: [SEARCH_WEB_TOOL],
         toolChoice: "auto",
         parallelToolCalls: false,
+        onContentChunk: params.onChunk,
+        onReasoningDetails: pushReasoningDetails,
         onBeforeRequest: (requestBody) =>
           appendDynamicPromptCapture(
             current.id,
@@ -684,13 +761,19 @@ async function runToolEnabledIdeaStage(
       messages.push(assistantMessage);
 
       if (turnResult.toolCalls.length === 0) {
-        if (turnResult.content && params.onChunk) {
-          params.onChunk(turnResult.content);
-        }
         return { raw: turnResult.content, trace };
       }
 
       for (const toolCall of turnResult.toolCalls) {
+        if (toolLoopStartedMs === null) {
+          toolLoopStartedMs = Date.now();
+        }
+
+        if (Date.now() - toolLoopStartedMs > config.totalStageBudgetMs) {
+          stopReason = `search_web tool-loop time budget exhausted for ${params.stage}`;
+          break;
+        }
+
         try {
           const executed = await executeSearchToolCall(trace, {
             runId: current.id,
@@ -698,7 +781,6 @@ async function runToolEnabledIdeaStage(
             stage: params.stage,
             toolCall,
             turn,
-            stageStartMs,
             seenUrls,
             config,
             signal: params.signal,
@@ -718,6 +800,10 @@ async function runToolEnabledIdeaStage(
             content: JSON.stringify({ error: message }),
           });
         }
+      }
+
+      if (stopReason) {
+        break;
       }
     } catch (error) {
       if (supportsToolCallingError(error as Error)) {
@@ -745,6 +831,7 @@ async function runToolEnabledIdeaStage(
                 params.initialMessages,
                 requestBody
               ),
+            onReasoningDetails: pushReasoningDetails,
           }
         );
         return { raw: fallbackRaw, trace };
@@ -753,7 +840,7 @@ async function runToolEnabledIdeaStage(
     }
   }
 
-  throw new Error(`Tool loop exceeded limit during ${params.stage}`);
+  throw new Error(stopReason ?? `search_web loop turn limit reached during ${params.stage}`);
 }
 
 function createFailure(
@@ -804,6 +891,15 @@ function mergeStageToolTrace(run: BenchmarkRun, trace: StageToolTrace): Benchmar
           (entry) => !(entry.stage === trace.usage.stage && entry.modelId === trace.usage.modelId)
         ),
         trace.usage,
+      ],
+    },
+    reasoning: {
+      ...run.reasoning,
+      details: [
+        ...run.reasoning.details.filter(
+          (entry) => !(entry.stage === trace.usage.stage && entry.modelId === trace.usage.modelId)
+        ),
+        ...trace.reasoningDetails,
       ],
     },
   };

@@ -16,10 +16,27 @@ export type ToolActivityEvent =
       };
     };
 
+export type ReasoningActivityEvent =
+  | {
+      type: "reasoning";
+      payload: {
+        modelId: string;
+        stage: "generate" | "revise";
+        detailId: string;
+        detailType: "reasoning.summary" | "reasoning.encrypted" | "reasoning.text";
+        format?: string;
+        index?: number;
+        text?: string;
+        summary?: string;
+        data?: string;
+      };
+    };
+
 type RunEvent =
   | { type: "progress"; payload: BenchmarkProgress }
   | { type: "token"; payload: { modelId: string; stage: string; chunk: string } }
-  | ToolActivityEvent;
+  | ToolActivityEvent
+  | ReasoningActivityEvent;
 
 type Listener = (event: RunEvent) => void;
 
@@ -71,6 +88,16 @@ class RunEventBus {
   ) {
     this.emit(runId, {
       type: "tool",
+      payload,
+    });
+  }
+
+  publishReasoningActivity(
+    runId: string,
+    payload: ReasoningActivityEvent["payload"]
+  ) {
+    this.emit(runId, {
+      type: "reasoning",
       payload,
     });
   }

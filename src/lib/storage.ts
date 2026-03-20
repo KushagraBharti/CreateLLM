@@ -2,6 +2,7 @@ import { promises as fs } from "fs";
 import path from "path";
 import {
   BenchmarkRun,
+  BenchmarkReasoningState,
   BenchmarkRunSummary,
   BenchmarkWebState,
   CircuitBreakerState,
@@ -87,6 +88,12 @@ function createWebState(): BenchmarkWebState {
     toolCalls: [],
     retrievedSources: [],
     usage: [],
+  };
+}
+
+function createReasoningState(): BenchmarkReasoningState {
+  return {
+    details: [],
   };
 }
 
@@ -242,6 +249,7 @@ function normalizeLegacyRun(run: Partial<BenchmarkRun>): BenchmarkRun {
     cancellation: run.cancellation ?? { requested: false },
     circuitBreaker: run.circuitBreaker ?? createCircuitBreakerState(),
     web: run.web ?? createWebState(),
+    reasoning: run.reasoning ?? createReasoningState(),
     metadata:
       run.metadata ?? {
         participantCount,
@@ -318,6 +326,7 @@ class FileBenchmarkRepository implements BenchmarkRepository {
       cancellation: { requested: false },
       circuitBreaker: createCircuitBreakerState(),
       web: createWebState(),
+      reasoning: createReasoningState(),
       metadata: {
         participantCount: selectedModels.length,
         minimumSuccessfulModels: minimumSuccessfulModels(selectedModels.length),

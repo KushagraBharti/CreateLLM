@@ -48,6 +48,7 @@ function ArenaContent() {
     submitHumanCritiques,
     streamingText,
     toolActivity,
+    reasoningActivity,
   } = useBenchmarkSSE();
 
   useEffect(() => {
@@ -175,7 +176,13 @@ function ArenaContent() {
               )}
 
               {hasResults && result && (
-                <ResultsView run={result} isLive={isRunning} streamingText={streamingText} toolActivity={toolActivity} />
+                <ResultsView
+                  run={result}
+                  isLive={isRunning}
+                  streamingText={streamingText}
+                  toolActivity={toolActivity}
+                  reasoningActivity={reasoningActivity}
+                />
               )}
 
               {error && (

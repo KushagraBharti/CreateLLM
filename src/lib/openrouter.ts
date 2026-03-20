@@ -1,9 +1,31 @@
+import { ReasoningDetailRecord } from "@/types";
 import { getOpenRouterCircuitBreaker } from "./circuit-breaker";
 
 const OPENROUTER_API_URL = "https://openrouter.ai/api/v1/chat/completions";
 
+interface PartialChatToolCall {
+  index?: number;
+  id?: string;
+  type?: "function";
+  function?: {
+    name?: string;
+    arguments?: string;
+  };
+}
+
 interface StreamDeltaChunk {
-  choices?: { delta?: { content?: string } }[];
+  choices?: {
+    delta?: {
+      content?: string;
+      tool_calls?: PartialChatToolCall[];
+      reasoning_details?: ReasoningDetail[];
+    };
+    finish_reason?: string | null;
+  }[];
+  error?: {
+    message: string;
+    code?: string | number;
+  };
 }
 
 export interface ChatToolFunction {
@@ -15,6 +37,17 @@ export interface ChatToolCall {
   id: string;
   type: "function";
   function: ChatToolFunction;
+}
+
+export interface ReasoningDetail {
+  id: string | null;
+  type: ReasoningDetailRecord["type"];
+  format?: string;
+  index?: number;
+  text?: string;
+  summary?: string;
+  data?: string;
+  signature?: string | null;
 }
 
 export interface ChatMessage {
@@ -44,6 +77,7 @@ interface OpenRouterResponse {
     message: {
       content?: string | null;
       tool_calls?: ChatToolCall[];
+      reasoning_details?: ReasoningDetail[];
     };
     finish_reason?: string | null;
   }[];
@@ -202,6 +236,7 @@ export interface CallModelTurnResult {
   content: string;
   toolCalls: ChatToolCall[];
   finishReason?: string | null;
+  reasoningDetails: ReasoningDetail[];
 }
 
 export async function callModelTurn(
@@ -243,15 +278,157 @@ export async function callModelTurn(
     content: typeof message.content === "string" ? message.content : "",
     toolCalls: Array.isArray(message.tool_calls) ? message.tool_calls : [],
     finishReason: choice?.finish_reason,
+    reasoningDetails: Array.isArray(message.reasoning_details) ? message.reasoning_details : [],
+  };
+}
+
+function mergeReasoningDetail(
+  target: Map<string, ReasoningDetail>,
+  detail: ReasoningDetail,
+  fallbackIndex: number
+) {
+  const key = detail.id ?? `${detail.type}:${detail.format ?? "unknown"}:${detail.index ?? fallbackIndex}`;
+  const existing = target.get(key);
+  if (!existing) {
+    target.set(key, { ...detail, id: detail.id ?? key });
+    return;
+  }
+
+  target.set(key, {
+    ...existing,
+    ...detail,
+    id: existing.id ?? detail.id ?? key,
+    text: `${existing.text ?? ""}${detail.text ?? ""}`,
+    summary: `${existing.summary ?? ""}${detail.summary ?? ""}`,
+    data: `${existing.data ?? ""}${detail.data ?? ""}`,
+  });
+}
+
+function mergeToolCallDelta(target: Map<number, ChatToolCall>, partial: PartialChatToolCall) {
+  const index = partial.index ?? target.size;
+  const existing = target.get(index);
+  const id = partial.id ?? existing?.id ?? `tool_call_${index}`;
+  target.set(index, {
+    id,
+    type: "function",
+    function: {
+      name: partial.function?.name ?? existing?.function.name ?? "",
+      arguments: `${existing?.function.arguments ?? ""}${partial.function?.arguments ?? ""}`,
+    },
+  });
+}
+
+export async function streamModelTurn(
+  openRouterId: string,
+  messages: ChatMessage[],
+  options: CallModelOptions & {
+    onContentChunk?: (chunk: string) => void;
+    onReasoningDetails?: (details: ReasoningDetail[]) => void;
+  } = {}
+): Promise<CallModelTurnResult> {
+  const {
+    reasoning,
+    timeoutMs = DEFAULT_TIMEOUT_MS,
+    signal,
+    onBeforeRequest,
+    tools,
+    toolChoice,
+    parallelToolCalls,
+    onContentChunk,
+    onReasoningDetails,
+  } = options;
+
+  const body = buildChatCompletionBody(openRouterId, messages, {
+    reasoning,
+    stream: true,
+    tools,
+    toolChoice,
+    parallelToolCalls,
+  });
+  await onBeforeRequest?.(body);
+
+  const response = await requestOpenRouter(body, timeoutMs, signal);
+  const reader = response.body?.getReader();
+  if (!reader) throw new Error("No response body");
+
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let content = "";
+  let finishReason: string | null | undefined;
+  const toolCalls = new Map<number, ChatToolCall>();
+  const reasoningDetails = new Map<string, ReasoningDetail>();
+
+  while (true) {
+    if (signal?.aborted) {
+      await reader.cancel();
+      throw signal.reason instanceof Error ? signal.reason : new Error("Aborted");
+    }
+
+    const { done, value } = await reader.read();
+    if (done) break;
+
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split("\n");
+    buffer = lines.pop() || "";
+
+    for (const line of lines) {
+      if (!line.startsWith("data: ")) continue;
+      const data = line.slice(6).trim();
+      if (!data || data === "[DONE]") continue;
+
+      let parsed: StreamDeltaChunk;
+      try {
+        parsed = JSON.parse(data) as StreamDeltaChunk;
+      } catch {
+        continue;
+      }
+
+      if (parsed.error?.message) {
+        throw new Error(`OpenRouter stream error: ${parsed.error.message}`);
+      }
+
+      const choice = parsed.choices?.[0];
+      const delta = choice?.delta;
+      if (choice?.finish_reason) {
+        finishReason = choice.finish_reason;
+      }
+
+      if (delta?.content) {
+        content += delta.content;
+        onContentChunk?.(delta.content);
+      }
+
+      if (Array.isArray(delta?.tool_calls)) {
+        for (const partial of delta.tool_calls) {
+          mergeToolCallDelta(toolCalls, partial);
+        }
+      }
+
+      if (Array.isArray(delta?.reasoning_details) && delta.reasoning_details.length > 0) {
+        delta.reasoning_details.forEach((detail, index) => mergeReasoningDetail(reasoningDetails, detail, index));
+        onReasoningDetails?.(delta.reasoning_details);
+      }
+    }
+  }
+
+  return {
+    content,
+    toolCalls: Array.from(toolCalls.entries())
+      .sort((a, b) => a[0] - b[0])
+      .map(([, value]) => value),
+    finishReason,
+    reasoningDetails: Array.from(reasoningDetails.values()).sort(
+      (a, b) => (a.index ?? 0) - (b.index ?? 0)
+    ),
   };
 }
 
 export async function* streamModel(
   openRouterId: string,
   messages: ChatMessage[],
-  options: CallModelOptions = {}
+  options: CallModelOptions & { onReasoningDetails?: (details: ReasoningDetail[]) => void } = {}
 ): AsyncGenerator<string> {
-  const { reasoning, timeoutMs = DEFAULT_TIMEOUT_MS, signal, onBeforeRequest } = options;
+  const { reasoning, timeoutMs = DEFAULT_TIMEOUT_MS, signal, onBeforeRequest, onReasoningDetails } = options;
   const body = buildChatCompletionBody(openRouterId, messages, {
     reasoning,
     stream: true,
@@ -285,13 +462,21 @@ export async function* streamModel(
       if (!line.startsWith("data: ")) continue;
       const data = line.slice(6).trim();
       if (data === "[DONE]") return;
+      let parsed: StreamDeltaChunk;
       try {
-        const parsed: StreamDeltaChunk = JSON.parse(data);
-        const chunk = parsed.choices?.[0]?.delta?.content;
-        if (chunk) yield chunk;
+        parsed = JSON.parse(data) as StreamDeltaChunk;
       } catch {
-        // Ignore malformed chunks.
+        continue;
       }
+      if (parsed.error?.message) {
+        throw new Error(`OpenRouter stream error: ${parsed.error.message}`);
+      }
+      const reasoningDetails = parsed.choices?.[0]?.delta?.reasoning_details;
+      if (Array.isArray(reasoningDetails) && reasoningDetails.length > 0) {
+        onReasoningDetails?.(reasoningDetails);
+      }
+      const chunk = parsed.choices?.[0]?.delta?.content;
+      if (chunk) yield chunk;
     }
   }
 }

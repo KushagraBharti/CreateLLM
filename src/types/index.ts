@@ -156,6 +156,20 @@ export interface RetrievedSourceRecord {
   retrievedAt: string;
 }
 
+export interface ReasoningDetailRecord {
+  id: string;
+  stage: RunCheckpointStage;
+  modelId: string;
+  type: "reasoning.summary" | "reasoning.encrypted" | "reasoning.text";
+  format?: string;
+  index?: number;
+  text?: string;
+  summary?: string;
+  data?: string;
+  signature?: string | null;
+  updatedAt: string;
+}
+
 export interface ModelStageWebUsageSummary {
   stage: WebEnabledStage;
   modelId: string;
@@ -182,6 +196,10 @@ export interface BenchmarkWebState {
   toolCalls: ToolCallRecord[];
   retrievedSources: RetrievedSourceRecord[];
   usage: ModelStageWebUsageSummary[];
+}
+
+export interface BenchmarkReasoningState {
+  details: ReasoningDetailRecord[];
 }
 
 export type BenchmarkStatus =
@@ -278,6 +296,7 @@ export interface BenchmarkRun {
   cancellation: RunCancellation;
   circuitBreaker: CircuitBreakerState;
   web: BenchmarkWebState;
+  reasoning: BenchmarkReasoningState;
   metadata: {
     participantCount: number;
     minimumSuccessfulModels: number;

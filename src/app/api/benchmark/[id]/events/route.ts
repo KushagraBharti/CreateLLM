@@ -28,7 +28,9 @@ export async function GET(
                   ? event.payload
                   : event.type === "token"
                     ? { type: "token", ...event.payload }
-                    : { type: "tool", ...event.payload }
+                    : event.type === "tool"
+                      ? { type: "tool", ...event.payload }
+                      : { type: "reasoning", ...event.payload }
               )}\n\n`
             )
           );

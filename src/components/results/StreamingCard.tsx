@@ -7,6 +7,14 @@ interface StreamingCardProps {
   modelId: string;
   text: string;
   stage: "generate" | "revise";
+  reasoningEntries?: Array<{
+    key: string;
+    detailType: "reasoning.summary" | "reasoning.encrypted" | "reasoning.text";
+    text?: string;
+    summary?: string;
+    data?: string;
+    format?: string;
+  }>;
   toolEntries?: Array<{
     key: string;
     toolName: string;
@@ -22,6 +30,7 @@ export default function StreamingCard({
   modelId,
   text,
   stage,
+  reasoningEntries = [],
   toolEntries = [],
 }: StreamingCardProps) {
   const model = getModelIdentity(modelId);
@@ -46,6 +55,50 @@ export default function StreamingCard({
           {stage === "generate" ? "generating" : "revising"}
         </span>
       </div>
+
+      {reasoningEntries.length > 0 && (
+        <div className="mb-4 space-y-2">
+          {reasoningEntries.map((entry) => {
+            const summaryLabel =
+              entry.detailType === "reasoning.summary"
+                ? "reasoning summary streamed"
+                : entry.detailType === "reasoning.encrypted"
+                  ? "reasoning streamed"
+                  : "reasoning streamed";
+            const body =
+              entry.detailType === "reasoning.summary"
+                ? entry.summary
+                : entry.detailType === "reasoning.encrypted"
+                  ? "[encrypted reasoning]"
+                  : entry.text;
+
+            return (
+              <details
+                key={entry.key}
+                className="group rounded-lg border border-border/70 bg-bg-surface/45"
+              >
+                <summary className="flex cursor-pointer list-none items-center gap-3 px-3 py-2 text-sm text-text-secondary transition-colors hover:text-text-primary">
+                  <span className="w-1.5 h-1.5 rounded-full bg-text-muted/80" />
+                  <span className="text-text-primary">{summaryLabel}</span>
+                  <span className="ml-auto font-mono uppercase tracking-[0.18em] text-[11px] text-text-muted">
+                    {entry.format ?? "reasoning"}
+                  </span>
+                </summary>
+
+                <div className="border-t border-border/60 px-3 py-3 text-sm text-text-secondary">
+                  {body ? (
+                    <pre className="whitespace-pre-wrap break-words font-mono text-[13px] leading-relaxed text-text-secondary">
+                      {body}
+                    </pre>
+                  ) : (
+                    <p className="text-text-muted">Reasoning received.</p>
+                  )}
+                </div>
+              </details>
+            );
+          })}
+        </div>
+      )}
 
       {toolEntries.length > 0 && (
         <div className="mb-4 space-y-2">

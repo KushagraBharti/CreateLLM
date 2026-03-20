@@ -15,6 +15,18 @@ export interface LiveToolActivity {
   error?: string;
 }
 
+export interface LiveReasoningActivity {
+  modelId: string;
+  stage: "generate" | "revise";
+  detailId: string;
+  detailType: "reasoning.summary" | "reasoning.encrypted" | "reasoning.text";
+  format?: string;
+  index?: number;
+  text?: string;
+  summary?: string;
+  data?: string;
+}
+
 interface SSEState {
   runId: string | null;
   isRunning: boolean;
@@ -24,6 +36,7 @@ interface SSEState {
   error: string | null;
   streamingText: Record<string, string>;
   toolActivity: Record<string, LiveToolActivity>;
+  reasoningActivity: Record<string, LiveReasoningActivity>;
 }
 
 interface StartBenchmarkPayload {
@@ -43,6 +56,7 @@ export function useBenchmarkSSE() {
     error: null,
     streamingText: {},
     toolActivity: {},
+    reasoningActivity: {},
   });
   const eventSourceRef = useRef<EventSource | null>(null);
 
@@ -81,6 +95,31 @@ export function useBenchmarkSSE() {
           return;
         }
 
+        if (event.type === "reasoning") {
+          setState((prev) => {
+            const key = `${event.stage}:${event.modelId}:${event.detailId}`;
+            const existing = prev.reasoningActivity[key];
+            return {
+              ...prev,
+              reasoningActivity: {
+                ...prev.reasoningActivity,
+                [key]: {
+                  modelId: event.modelId,
+                  stage: event.stage,
+                  detailId: event.detailId,
+                  detailType: event.detailType,
+                  format: event.format ?? existing?.format,
+                  index: event.index ?? existing?.index,
+                  text: `${existing?.text ?? ""}${event.text ?? ""}`,
+                  summary: `${existing?.summary ?? ""}${event.summary ?? ""}`,
+                  data: `${existing?.data ?? ""}${event.data ?? ""}`,
+                },
+              },
+            };
+          });
+          return;
+        }
+
         setState((prev) => {
           const nextStatus = event.status as BenchmarkStatus;
           const isTerminal = ["complete", "partial", "canceled", "dead_lettered", "error"].includes(nextStatus);
@@ -101,6 +140,10 @@ export function useBenchmarkSSE() {
               nextStatus !== prev.status && !["generating", "revising"].includes(nextStatus)
                 ? {}
                 : prev.toolActivity,
+            reasoningActivity:
+              nextStatus !== prev.status && !["generating", "revising"].includes(nextStatus)
+                ? {}
+                : prev.reasoningActivity,
           };
         });
       } catch {
@@ -128,6 +171,7 @@ export function useBenchmarkSSE() {
         error: null,
         streamingText: {},
         toolActivity: {},
+        reasoningActivity: {},
       });
 
       const response = await fetch("/api/benchmark", {
@@ -193,10 +237,11 @@ export function useBenchmarkSSE() {
       status: null,
       step: "",
       result: null,
-      error: null,
-      streamingText: {},
-      toolActivity: {},
-    });
+        error: null,
+        streamingText: {},
+        toolActivity: {},
+        reasoningActivity: {},
+      });
   }, [closeSource]);
 
   return useMemo(
@@ -217,7 +262,9 @@ export function useBenchmarkSSE() {
           state.result.revisedIdeas.length > 0 ||
           state.result.finalRankings.length > 0 ||
           state.result.web.toolCalls.length > 0 ||
-          Object.keys(state.toolActivity).length > 0),
+          state.result.reasoning.details.length > 0 ||
+          Object.keys(state.toolActivity).length > 0 ||
+          Object.keys(state.reasoningActivity).length > 0),
     }),
     [connectToRun, performAction, reset, startBenchmark, state]
   );
