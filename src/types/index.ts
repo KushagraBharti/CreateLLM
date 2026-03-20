@@ -186,8 +186,6 @@ export interface BenchmarkWebSearchConfig {
   maxSearchCallsPerStagePerModel: number;
   maxResultsPerSearch: number;
   maxCharsPerResult: number;
-  perCallTimeoutMs: number;
-  totalStageBudgetMs: number;
   maxLoopTurns: number;
 }
 

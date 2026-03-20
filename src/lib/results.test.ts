@@ -67,8 +67,6 @@ describe("results loaders", () => {
           maxSearchCallsPerStagePerModel: 2,
           maxResultsPerSearch: 3,
           maxCharsPerResult: 12000,
-          perCallTimeoutMs: 10000,
-          totalStageBudgetMs: 30000,
           maxLoopTurns: 5,
         },
         toolCalls: [],

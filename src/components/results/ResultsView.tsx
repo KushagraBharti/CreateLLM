@@ -68,6 +68,38 @@ export default function ResultsView({
   const hasSearchActivity = run.web.toolCalls.length > 0 || Object.keys(toolActivity).length > 0;
   const liveSearchEntries = Object.values(toolActivity);
   const liveReasoningEntries = Object.values(reasoningActivity);
+  const failedModelDetails = useMemo(() => {
+    const modelIds = new Set<string>(run.failedModels);
+
+    for (const [modelId, state] of Object.entries(run.modelStates)) {
+      if (state.status === "failed" || state.status === "skipped" || state.status === "canceled" || state.error) {
+        modelIds.add(modelId);
+      }
+    }
+
+    for (const failure of run.failures) {
+      if (failure.modelId) modelIds.add(failure.modelId);
+    }
+
+    return Array.from(modelIds).map((modelId) => {
+      const state = run.modelStates[modelId];
+      const failure = [...run.failures]
+        .filter((entry) => entry.modelId === modelId)
+        .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())[0];
+
+      return {
+        modelId,
+        model: getModelIdentity(modelId),
+        stage: failure?.stage ?? state?.stage ?? run.checkpoint.stage,
+        status: state?.status ?? "failed",
+        message:
+          state?.error ??
+          failure?.message ??
+          run.error ??
+          "No explicit failure cause was recorded for this model.",
+      };
+    });
+  }, [run.checkpoint.stage, run.error, run.failedModels, run.failures, run.modelStates]);
 
   const getStreamingToolEntries = useMemo(() => {
     return (modelId: string, stage: "generate" | "revise") => {
@@ -91,7 +123,7 @@ export default function ResultsView({
           toolName: call.toolName,
           state: call.error ? "failed" : call.completedAt ? "completed" : "started",
           query: call.args.query,
-          urls: call.resultSummary?.urls,
+          urls: call.resultPayload?.results.map((result) => result.url) ?? call.resultSummary?.urls,
           resultCount: call.resultSummary?.resultCount,
           error: call.error,
         });
@@ -175,13 +207,33 @@ export default function ResultsView({
     ...(!isLive ? [{ id: "search", label: "Search", count: run.web.retrievedSources.length, available: hasSearchActivity }] : []),
   ];
 
+  const failurePanel = failedModelDetails.length > 0 && (
+    <div className="rounded-2xl border border-[#7C3E3E]/60 bg-[#2A1717]/55 p-4">
+      <p className="label mb-3">Failure Causes</p>
+      <div className="space-y-3">
+        {failedModelDetails.map(({ modelId, model, stage, status, message }) => (
+          <div key={modelId} className="rounded-xl border border-[#7C3E3E]/40 bg-bg-deep/55 px-4 py-3">
+            <div className="flex items-center gap-2.5">
+              <span className="w-2 h-2 rounded-full" style={{ backgroundColor: model.color }} />
+              <span className="text-base text-text-primary">{model.name}</span>
+              <span className="ml-auto font-mono text-[11px] uppercase tracking-[0.18em] text-[#D8A8A8]">
+                {stage} · {status}
+              </span>
+            </div>
+            <p className="mt-2 text-sm leading-relaxed text-[#E7C4C4]">{message}</p>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+
   return (
     <div>
       <div className="mb-8">
         <div className="flex items-center gap-3 mb-3 flex-wrap">
           <span className="label capitalize">{run.categoryId}</span>
           {isLive && run.status !== "complete" && run.status !== "partial" && <Badge color="#6BBF7B" pulse>Live</Badge>}
-          {run.failedModels.length > 0 && <Badge color="#C75050">{run.failedModels.length} failed</Badge>}
+          {failedModelDetails.length > 0 && <Badge color="#C75050">{failedModelDetails.length} issue{failedModelDetails.length === 1 ? "" : "s"}</Badge>}
         </div>
         <p className="text-text-primary font-medium text-base">{run.prompt}</p>
         <p className="font-mono text-base text-text-muted mt-1">
@@ -213,14 +265,7 @@ export default function ResultsView({
                   />
                 ))}
 
-            {run.failedModels.length > 0 && (
-              <div className="border border-border rounded-xl p-4 bg-bg-surface/60">
-                <p className="label mb-2">Unavailable Models</p>
-                <p className="text-base text-text-muted">
-                  {run.failedModels.map((modelId) => getModelIdentity(modelId).name).join(", ")}
-                </p>
-              </div>
-            )}
+            {failurePanel}
           </div>
         )}
 
@@ -341,12 +386,15 @@ export default function ResultsView({
                     toolEntries={getStreamingToolEntries(modelId, "revise")}
                   />
                 ))}
+
+            {failurePanel}
           </div>
         )}
 
         {activeTab === "final" && (
           <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="space-y-4">
             <RankingDisplay rankings={run.finalRankings} title="Final Rankings - Revised Ideas" showPodium showReasoning />
+            {failurePanel}
             {run.status !== "complete" && (
               <div className="border border-border rounded-xl p-4 bg-bg-surface/60">
                 <p className="label mb-2">Run Status</p>

@@ -125,14 +125,6 @@ function supportsToolCallingError(error: Error): boolean {
   );
 }
 
-function getEffectiveModelTimeoutMs(openRouterId: string): number {
-  if (openRouterId.startsWith("anthropic/")) {
-    return Math.max(MODEL_TIMEOUT_MS, 240_000);
-  }
-
-  return MODEL_TIMEOUT_MS;
-}
-
 function normalizeSearchArgs(rawArgs: string): SearchWebArgs {
   const parsed = JSON.parse(rawArgs) as Record<string, unknown>;
   const toStringArray = (value: unknown): string[] | undefined =>
@@ -364,7 +356,7 @@ async function callModelWithJsonRetry(
   options: JsonRetryOptions = {}
 ): Promise<string> {
   const { retryOnInvalidJson = true, onBeforeRequest } = options;
-  const timeoutMs = getEffectiveModelTimeoutMs(openRouterId);
+  const timeoutMs = MODEL_TIMEOUT_MS;
   const raw = await callModel(openRouterId, messages, {
     reasoning,
     timeoutMs,
@@ -405,7 +397,7 @@ async function streamModelAndCollect(
     onBeforeRequest,
     onReasoningDetails,
   } = options;
-  const timeoutMs = getEffectiveModelTimeoutMs(openRouterId);
+  const timeoutMs = MODEL_TIMEOUT_MS;
   let accumulated = "";
 
   try {
@@ -557,12 +549,11 @@ async function executeSearchToolCall(
 
   try {
     const payload = dedupeSearchPayload(
-      await searchWebWithExa(args, {
-        signal: params.signal,
-        timeoutMs: params.config.perCallTimeoutMs,
-        maxResults: params.config.maxResultsPerSearch,
-        maxCharsPerResult: params.config.maxCharsPerResult,
-      }),
+        await searchWebWithExa(args, {
+          signal: params.signal,
+          maxResults: params.config.maxResultsPerSearch,
+          maxCharsPerResult: params.config.maxCharsPerResult,
+        }),
       params.seenUrls
     );
 
@@ -666,9 +657,8 @@ async function runToolEnabledIdeaStage(
   const messages = [...params.initialMessages];
   const seenUrls = new Set<string>();
   const config = current.web.config;
-  const timeoutMs = getEffectiveModelTimeoutMs(params.openRouterId);
+  const timeoutMs = MODEL_TIMEOUT_MS;
   let trace = createStageToolTrace(params.stage, params.modelId);
-  let toolLoopStartedMs: number | null = null;
   let stopReason: string | null = null;
   const pushReasoningDetails = (details: ReasoningDetail[]) => {
     trace = {
@@ -721,14 +711,6 @@ async function runToolEnabledIdeaStage(
   }
 
   for (let turn = 0; turn < config.maxLoopTurns; turn++) {
-    if (
-      toolLoopStartedMs !== null &&
-      Date.now() - toolLoopStartedMs > config.totalStageBudgetMs
-    ) {
-      stopReason = `search_web tool-loop time budget exhausted for ${params.stage}`;
-      break;
-    }
-
     try {
       const turnResult = await streamModelTurn(params.openRouterId, messages, {
         reasoning: params.reasoning,
@@ -765,15 +747,6 @@ async function runToolEnabledIdeaStage(
       }
 
       for (const toolCall of turnResult.toolCalls) {
-        if (toolLoopStartedMs === null) {
-          toolLoopStartedMs = Date.now();
-        }
-
-        if (Date.now() - toolLoopStartedMs > config.totalStageBudgetMs) {
-          stopReason = `search_web tool-loop time budget exhausted for ${params.stage}`;
-          break;
-        }
-
         try {
           const executed = await executeSearchToolCall(trace, {
             runId: current.id,

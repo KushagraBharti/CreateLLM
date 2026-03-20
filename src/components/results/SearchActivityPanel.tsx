@@ -104,10 +104,13 @@ export default function SearchActivityPanel({
                             href={source.url}
                             target="_blank"
                             rel="noreferrer"
-                            className="mt-2 block text-base text-text-primary hover:text-accent transition-colors"
+                            className="mt-2 block break-all text-base text-text-primary hover:text-accent transition-colors"
                           >
-                            {source.title || source.url}
+                            {source.url}
                           </a>
+                          {source.title && source.title !== source.url && (
+                            <p className="mt-1 text-sm text-text-muted">{source.title}</p>
+                          )}
                           {source.snippet && (
                             <p className="mt-2 text-sm text-text-secondary leading-relaxed">
                               {source.snippet}

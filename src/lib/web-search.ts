@@ -11,8 +11,6 @@ export const DEFAULT_WEB_SEARCH_CONFIG = {
   maxSearchCallsPerStagePerModel: 2,
   maxResultsPerSearch: 3,
   maxCharsPerResult: 20_000,
-  perCallTimeoutMs: 10_000,
-  totalStageBudgetMs: 30_000,
   maxLoopTurns: 6,
 } as const;
 
@@ -31,28 +29,6 @@ interface ExaSearchResponse {
 export interface SearchWebPayload {
   query: string;
   results: SearchWebResultItem[];
-}
-
-function timeoutSignal(ms: number, signal?: AbortSignal): AbortSignal {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(new Error(`Timeout after ${ms}ms`)), ms);
-
-  signal?.addEventListener(
-    "abort",
-    () => {
-      controller.abort(signal.reason);
-      clearTimeout(timer);
-    },
-    { once: true }
-  );
-
-  controller.signal.addEventListener(
-    "abort",
-    () => clearTimeout(timer),
-    { once: true }
-  );
-
-  return controller.signal;
 }
 
 function clampMaxResults(value: number | undefined): number {
@@ -163,7 +139,6 @@ export async function searchWebWithExa(
   args: SearchWebArgs,
   options: {
     signal?: AbortSignal;
-    timeoutMs?: number;
     maxResults?: number;
     maxCharsPerResult?: number;
   } = {}
@@ -189,7 +164,7 @@ export async function searchWebWithExa(
       "x-api-key": apiKey,
     },
     body: JSON.stringify(body),
-    signal: timeoutSignal(options.timeoutMs ?? DEFAULT_WEB_SEARCH_CONFIG.perCallTimeoutMs, options.signal),
+    signal: options.signal,
   });
 
   if (!response.ok) {
