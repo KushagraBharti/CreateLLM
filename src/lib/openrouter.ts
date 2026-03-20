@@ -33,6 +33,7 @@ export interface CallModelOptions {
   reasoning?: ReasoningConfig;
   timeoutMs?: number;
   signal?: AbortSignal;
+  onBeforeRequest?: (body: Record<string, unknown>) => void | Promise<void>;
 }
 
 const DEFAULT_TIMEOUT_MS = 90_000;
@@ -131,12 +132,13 @@ export async function callModel(
   messages: ChatMessage[],
   options: CallModelOptions = {}
 ): Promise<string> {
-  const { maxRetries = 2, reasoning, timeoutMs = DEFAULT_TIMEOUT_MS, signal } = options;
+  const { maxRetries = 2, reasoning, timeoutMs = DEFAULT_TIMEOUT_MS, signal, onBeforeRequest } = options;
   let lastError: Error | null = null;
 
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
     try {
       const body = buildChatCompletionBody(openRouterId, messages, { reasoning });
+      await onBeforeRequest?.(body);
       const response = await requestOpenRouter(body, timeoutMs, signal);
       const data: OpenRouterResponse = await response.json();
 
@@ -167,8 +169,9 @@ export async function* streamModel(
   messages: ChatMessage[],
   options: CallModelOptions = {}
 ): AsyncGenerator<string> {
-  const { reasoning, timeoutMs = DEFAULT_TIMEOUT_MS, signal } = options;
+  const { reasoning, timeoutMs = DEFAULT_TIMEOUT_MS, signal, onBeforeRequest } = options;
   const body = buildChatCompletionBody(openRouterId, messages, { reasoning, stream: true });
+  await onBeforeRequest?.(body);
 
   const response = await requestOpenRouter(body, timeoutMs, signal);
   const reader = response.body?.getReader();

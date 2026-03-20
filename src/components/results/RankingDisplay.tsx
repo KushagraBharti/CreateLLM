@@ -10,6 +10,7 @@ interface RankingDisplayProps {
   rankings: Ranking[];
   title: string;
   showPodium?: boolean;
+  showReasoning?: boolean;
 }
 
 function aggregateRankings(rankings: Ranking[]): AggregatedScore[] {
@@ -39,7 +40,7 @@ function aggregateRankings(rankings: Ranking[]): AggregatedScore[] {
 
 const placeLabels = ["1st", "2nd", "3rd", "4th"];
 
-export default function RankingDisplay({ rankings, title, showPodium }: RankingDisplayProps) {
+export default function RankingDisplay({ rankings, title, showPodium, showReasoning }: RankingDisplayProps) {
   const [showJudges, setShowJudges] = useState(false);
   if (rankings.length === 0) return null;
   const scores = aggregateRankings(rankings);
@@ -150,7 +151,7 @@ export default function RankingDisplay({ rankings, title, showPodium }: RankingD
                         <span className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: judge.color }} />
                         <span className="text-base text-text-muted">Judge: {judge.name}</span>
                       </div>
-                      <div className="space-y-1">
+                      <div className="space-y-3">
                         {[...ranking.rankings].sort((a, b) => a.rank - b.rank).map((entry) => {
                           const m = getModelIdentity(entry.modelId);
                           return (
@@ -176,6 +177,55 @@ export default function RankingDisplay({ rankings, title, showPodium }: RankingD
           )}
         </AnimatePresence>
       </div>
+
+      {showReasoning && (
+        <div className="mt-8 border-t border-border pt-6">
+          <p className="label">Why Each Model Landed Here</p>
+          <div className="mt-4 space-y-6">
+            {scores.map((score) => {
+              const model = getModelIdentity(score.modelId);
+              const judgeReasons = rankings
+                .map((ranking) => {
+                  const entry = ranking.rankings.find((candidate) => candidate.modelId === score.modelId);
+                  if (!entry?.reasoning) return null;
+                  return {
+                    judge: getModelIdentity(ranking.judgeModelId),
+                    rank: entry.rank,
+                    score: entry.score,
+                    reasoning: entry.reasoning,
+                  };
+                })
+                .filter((entry): entry is NonNullable<typeof entry> => Boolean(entry));
+
+              return (
+                <div key={score.modelId} className="border-b border-border/60 pb-5 last:border-0 last:pb-0">
+                  <div className="flex items-center gap-2.5 mb-3">
+                    <span className="w-2 h-2 rounded-full" style={{ backgroundColor: model.color }} />
+                    <span className="text-base text-text-primary">{score.modelName}</span>
+                    <span className="font-mono text-sm text-text-muted ml-auto">
+                      avg rank {score.averageRank.toFixed(2)} · avg score {score.averageScore.toFixed(1)}
+                    </span>
+                  </div>
+                  <div className="space-y-3">
+                    {judgeReasons.map((entry) => (
+                      <div key={`${score.modelId}-${entry.judge.name}`} className="border-l border-border pl-4">
+                        <div className="flex items-center gap-2 text-sm text-text-muted">
+                          <span className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: entry.judge.color }} />
+                          <span>{entry.judge.name}</span>
+                          <span className="font-mono ml-auto">#{entry.rank} · {entry.score}/10</span>
+                        </div>
+                        <p className="mt-1.5 text-sm leading-relaxed text-text-secondary">
+                          {entry.reasoning}
+                        </p>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

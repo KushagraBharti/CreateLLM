@@ -7,9 +7,10 @@ import { getModelIdentity } from "@/utils/model-identity";
 interface CritiqueCardProps {
   critique: CritiqueEntry;
   fromModelId: string;
+  headingOverride?: string;
 }
 
-export default function CritiqueCard({ critique, fromModelId }: CritiqueCardProps) {
+export default function CritiqueCard({ critique, fromModelId, headingOverride }: CritiqueCardProps) {
   const from = getModelIdentity(fromModelId);
   const to = getModelIdentity(critique.targetModelId);
 
@@ -34,7 +35,7 @@ export default function CritiqueCard({ critique, fromModelId }: CritiqueCardProp
             color: critique.score >= 7 ? "#6BBF7B" : critique.score >= 5 ? "#C9A84C" : "#C75050",
           }}
         >
-          {critique.score}/10
+          {typeof critique.ranking === "number" ? `#${critique.ranking} · ` : ""}{critique.score}/10
         </span>
       </div>
 
@@ -42,7 +43,7 @@ export default function CritiqueCard({ critique, fromModelId }: CritiqueCardProp
       <div className="space-y-2.5 text-base text-text-secondary leading-relaxed">
         {critique.strengths && (
           <div>
-            <span className="label text-success">Strengths</span>
+            <span className="label text-success">{headingOverride ?? "Strengths"}</span>
             <p className="mt-0.5">{critique.strengths}</p>
           </div>
         )}

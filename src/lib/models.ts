@@ -270,21 +270,40 @@ export function createBringYourOwnModel(openRouterId: string): ModelCatalogEntry
   };
 }
 
+function cloneModelEntry(model: ModelCatalogEntry, ordinal: number): ModelCatalogEntry {
+  if (ordinal <= 1) return model;
+
+  return {
+    ...model,
+    id: `${model.id}__${ordinal}`,
+    name: `${model.name} ${ordinal}`,
+    initial: model.initial,
+    defaultEnabled: false,
+  };
+}
+
 export function resolveSelectedModels(
   selectedModelIds: string[],
   customModelIds: string[] = []
 ): ModelCatalogEntry[] {
-  const selected = selectedModelIds
-    .map((id) => getModelById(id))
-    .filter((model): model is ModelCatalogEntry => Boolean(model));
-  const custom = customModelIds
-    .filter((id) => isValidOpenRouterModelId(id))
-    .map((id) => createBringYourOwnModel(id));
+  const counts = new Map<string, number>();
+  const resolved: ModelCatalogEntry[] = [];
 
-  const deduped = new Map<string, ModelCatalogEntry>();
-  for (const model of [...selected, ...custom]) {
-    deduped.set(model.openRouterId, model);
+  for (const id of selectedModelIds) {
+    const model = getModelById(id);
+    if (!model) continue;
+    const ordinal = (counts.get(model.openRouterId) ?? 0) + 1;
+    counts.set(model.openRouterId, ordinal);
+    resolved.push(cloneModelEntry(model, ordinal));
   }
 
-  return [...deduped.values()];
+  for (const id of customModelIds) {
+    if (!isValidOpenRouterModelId(id)) continue;
+    const model = createBringYourOwnModel(id);
+    const ordinal = (counts.get(model.openRouterId) ?? 0) + 1;
+    counts.set(model.openRouterId, ordinal);
+    resolved.push(cloneModelEntry(model, ordinal));
+  }
+
+  return resolved;
 }

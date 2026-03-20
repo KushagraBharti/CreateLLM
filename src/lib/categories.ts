@@ -6,11 +6,11 @@ export const categories: Category[] = [
     name: "Venture",
     description: "Startup concepts, business models, and entrepreneurial ventures",
     examplePrompts: [
+      "No prompt. You are have full and total freedom to propose any kind of startup or business venture you want.",
       "Create a startup concept for a sustainable fashion marketplace",
-      "Design a new SaaS product for remote team collaboration",
       "Propose a disruptive business model for the education industry",
     ],
-    systemPrompt: `You are a world-class venture strategist and serial entrepreneur with deep expertise in market analysis, business model innovation, and startup ecosystems. Think like a top-tier VC evaluating billion-dollar opportunities. Creativity in this domain means: identifying untapped markets, designing novel business models with defensible moats, finding non-obvious customer pain points, and proposing ventures that are both wildly ambitious and grounded in real market dynamics.`,
+    systemPrompt: `You are a world-class serial entreprenuer, venture strategist, and you've founded unicorn companies in the past. You have deep expertise in market analysis, business model innovation, and startup ecosystems. Think like a top-tier VC evaluating billion-dollar opportunities. Creativity in this domain means: identifying untapped markets, designing novel business models with defensible moats, finding non-obvious customer pain points, and proposing ventures that are both wildly ambitious and grounded in real market dynamics.`,
     evaluationCriteria: [
       "Market insight — does it identify a real, underserved need?",
       "Business model originality — is the revenue/growth model novel?",
@@ -33,9 +33,9 @@ export const categories: Category[] = [
     name: "Frontier",
     description: "Novel research directions, scientific hypotheses, and academic proposals",
     examplePrompts: [
-      "Propose a novel approach to carbon capture using synthetic biology",
+      "No prompt. You are have full and total freedom to propose any kind of research direction or hypothesis you want.",
+      "Propose a novel approach to carbon capture technology",
       "Design a research study on the cognitive effects of AI-assisted learning",
-      "Suggest a new framework for understanding dark matter distribution",
     ],
     systemPrompt: `You are a visionary interdisciplinary scientist who operates at the cutting edge of multiple fields. You think like the researchers who win MacArthur "genius" grants — connecting dots across domains that others miss. Creativity in this domain means: proposing testable hypotheses that challenge conventional wisdom, designing elegant experiments, identifying overlooked connections between fields, and articulating research that could fundamentally shift our understanding.`,
     evaluationCriteria: [
@@ -55,13 +55,39 @@ export const categories: Category[] = [
     ],
   },
   {
+    id: "blueprint",
+    name: "Blueprint",
+    description: "Inventions, engineering concepts, and innovative technical solutions",
+    examplePrompts: [
+      "No prompt. You are have full and total freedom to propose any kind of invention or engineering concept you want.",
+      "Propose an invention that makes vertical farming accessible to apartments",
+      "Create a concept for a new type of transportation for dense urban areas",
+    ],
+    systemPrompt: `You are a visionary inventor-engineer in the tradition of Nikola Tesla and Buckminster Fuller — someone who sees elegant solutions where others see impossible problems. You combine deep technical understanding with radical imagination. Creativity in this domain means: solving real problems with surprising approaches, finding solutions that are both technically grounded and paradigm-shifting, designing systems that are elegant in their simplicity, and proposing inventions that make people say "why didn't anyone think of that before?"`,
+    evaluationCriteria: [
+      "Problem-solution fit — does it solve a real, important problem?",
+      "Technical creativity — is the approach genuinely novel?",
+      "Elegance — is the solution simpler or more clever than expected?",
+      "Feasibility — could this be built with current or near-future technology?",
+      "Impact potential — how many people would this help and how much?",
+    ],
+    ideaSchema: [
+      { key: "title", label: "Invention Name", description: "The name of the invention or concept" },
+      { key: "summary", label: "One-Liner", description: "A single sentence explaining what it does" },
+      { key: "description", label: "Full Concept", description: "Detailed explanation of how it works" },
+      { key: "novelty", label: "What's New", description: "How this differs from existing solutions" },
+      { key: "problem", label: "Problem Solved", description: "The specific problem this addresses" },
+      { key: "mechanism", label: "How It Works", description: "The core technical mechanism or principle" },
+    ],
+  },
+  {
     id: "story",
     name: "Story",
     description: "Short fiction premises, plot twists, poetry, and narrative concepts",
     examplePrompts: [
+      "No prompt. You are have full and total freedom to propose any kind of story or narrative concept you want.",
       "Write a compelling premise for a sci-fi novel set in 2150",
       "Create an unexpected plot twist for a mystery thriller",
-      "Design a unique magic system for a fantasy world",
     ],
     systemPrompt: `You are a master storyteller with the literary sensibility of the greatest fiction writers. You understand narrative structure, voice, subtext, and the art of subverting reader expectations. Creativity in this domain means: crafting premises that feel both surprising and inevitable, building worlds with internal logic that rewards exploration, creating characters driven by complex motivations, and finding fresh angles on universal themes.`,
     evaluationCriteria: [
@@ -85,9 +111,9 @@ export const categories: Category[] = [
     name: "Cinema",
     description: "Movie pitches, screenplay concepts, and film loglines",
     examplePrompts: [
+      "No prompt. You are have full and total freedom to propose any kind of film concept or screenplay idea you want.",
       "Pitch a psychological thriller set entirely inside a space station",
       "Create a logline for an animated film about sentient ocean currents",
-      "Design a documentary concept exploring forgotten ancient civilizations",
     ],
     systemPrompt: `You are a visionary filmmaker and screenwriter who thinks in images, sequences, and cinematic moments. You understand visual storytelling, pacing, and what makes audiences lean forward in their seats. Creativity in this domain means: conceiving films that could only work as cinema (not just "a book but on screen"), designing iconic visual moments, finding stories that resonate universally while feeling completely fresh, and understanding the alchemy of genre, tone, and audience.`,
     evaluationCriteria: [
@@ -111,9 +137,9 @@ export const categories: Category[] = [
     name: "Folio",
     description: "Novel premises, nonfiction book concepts, and plot structures",
     examplePrompts: [
+      "No prompt. You are have full and total freedom to propose any kind of book concept you want.",
       "Pitch a nonfiction book about the hidden history of color",
       "Create a premise for a multi-generational family saga spanning 200 years",
-      "Design the structure for a choose-your-own-adventure novel for adults",
     ],
     systemPrompt: `You are a brilliant literary mind — equal parts novelist, essayist, and publisher with an instinct for what makes a book culturally significant. You understand the difference between a good idea and a great book. Creativity in this domain means: finding the perfect form for a concept (memoir, novel, anthology, hybrid), identifying subjects that deserve book-length treatment, structuring narratives that sustain across hundreds of pages, and proposing books that fill genuine gaps in the literary landscape.`,
     evaluationCriteria: [
@@ -135,11 +161,11 @@ export const categories: Category[] = [
   {
     id: "canvas",
     name: "Canvas",
-    description: "Visual art directions, game world concepts, and album themes",
+    description: "Visual art directions, sculptural concepts, and game world concepts",
     examplePrompts: [
+      "No prompt. You are have full and total freedom to propose any kind of visual art, game, or music concept you want.",
       "Design an art installation concept that responds to viewers' emotions",
       "Create a video game world inspired by bioluminescent deep-sea creatures",
-      "Propose an album concept that tells a story across 12 tracks",
     ],
     systemPrompt: `You are a polymath creative director who moves fluidly between visual art, game design, music, and interactive experiences. You think in aesthetics, systems, and sensory experiences. Creativity in this domain means: designing experiences that engage multiple senses, building coherent aesthetic worlds with their own internal logic, finding unexpected mediums or formats for ideas, and creating concepts that blur the lines between art, technology, and play.`,
     evaluationCriteria: [
@@ -163,7 +189,7 @@ export const categories: Category[] = [
     name: "Stage",
     description: "Theater productions, musical concepts, and live performance ideas",
     examplePrompts: [
-      "Pitch a one-person stage show about the life of a time traveler",
+      "No prompt. You are have full and total freedom to propose any kind of stage production or live performance idea you want.",
       "Design a musical concept set in a post-apocalyptic underground city",
       "Create an immersive theater experience based on a classic myth",
     ],
@@ -182,32 +208,6 @@ export const categories: Category[] = [
       { key: "novelty", label: "What's New", description: "How this reinvents or pushes the theatrical form" },
       { key: "staging", label: "Staging & Space", description: "How the physical space and staging work" },
       { key: "audienceExperience", label: "Audience Experience", description: "What it's like to be in the room" },
-    ],
-  },
-  {
-    id: "blueprint",
-    name: "Blueprint",
-    description: "Inventions, engineering concepts, and innovative technical solutions",
-    examplePrompts: [
-      "Design a device that converts ambient sound into usable energy",
-      "Propose an invention that makes vertical farming accessible to apartments",
-      "Create a concept for a new type of transportation for dense urban areas",
-    ],
-    systemPrompt: `You are a visionary inventor-engineer in the tradition of Nikola Tesla and Buckminster Fuller — someone who sees elegant solutions where others see impossible problems. You combine deep technical understanding with radical imagination. Creativity in this domain means: solving real problems with surprising approaches, finding solutions that are both technically grounded and paradigm-shifting, designing systems that are elegant in their simplicity, and proposing inventions that make people say "why didn't anyone think of that before?"`,
-    evaluationCriteria: [
-      "Problem-solution fit — does it solve a real, important problem?",
-      "Technical creativity — is the approach genuinely novel?",
-      "Elegance — is the solution simpler or more clever than expected?",
-      "Feasibility — could this be built with current or near-future technology?",
-      "Impact potential — how many people would this help and how much?",
-    ],
-    ideaSchema: [
-      { key: "title", label: "Invention Name", description: "The name of the invention or concept" },
-      { key: "summary", label: "One-Liner", description: "A single sentence explaining what it does" },
-      { key: "description", label: "Full Concept", description: "Detailed explanation of how it works" },
-      { key: "novelty", label: "What's New", description: "How this differs from existing solutions" },
-      { key: "problem", label: "Problem Solved", description: "The specific problem this addresses" },
-      { key: "mechanism", label: "How It Works", description: "The core technical mechanism or principle" },
     ],
   },
 ];

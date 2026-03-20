@@ -67,6 +67,7 @@ export interface CritiqueEntry {
   weaknesses: string;
   suggestions: string;
   score: number;
+  ranking?: number;
 }
 
 export interface CritiqueVoteResult {

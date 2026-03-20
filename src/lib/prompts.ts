@@ -46,12 +46,7 @@ export function buildCritiqueVotePrompt(
   originalPrompt: string,
   anonymousMap: Map<string, string> // modelId -> "A", "B", "C", etc.
 ): { system: string; user: string } {
-  // Show all ideas EXCEPT the judge's own
-  const otherIdeas = ideas.filter((i) => i.modelId !== judgeModelId);
-  // All ideas for ranking (including judge's own)
-  const allIdeas = ideas;
-
-  const ideasText = otherIdeas
+  const ideasText = ideas
     .map((idea) => {
       const label = anonymousMap.get(idea.modelId)!;
       return `--- IDEA BY ANONYMOUS MODEL ${label} ---
@@ -60,14 +55,7 @@ ${formatIdeaContent(idea.content, category)}
     })
     .join("\n\n");
 
-  const allIdeasList = allIdeas
-    .map((idea) => {
-      const label = anonymousMap.get(idea.modelId)!;
-      return `Anonymous Model ${label}`;
-    })
-    .join(", ");
-
-  const critiqueJsonFields = otherIdeas
+  const critiqueJsonFields = ideas
     .map((idea) => {
       const label = anonymousMap.get(idea.modelId)!;
       return `    {
@@ -75,15 +63,9 @@ ${formatIdeaContent(idea.content, category)}
       "strengths": "<what makes this idea creative and valuable>",
       "weaknesses": "<what's unoriginal, missing, or could be improved>",
       "suggestions": "<specific, actionable ways to improve the idea>",
-      "score": <1-10>
+      "score": <1-10>,
+      "ranking": <position>
     }`;
-    })
-    .join(",\n");
-
-  const rankingJsonFields = allIdeas
-    .map((idea) => {
-      const label = anonymousMap.get(idea.modelId)!;
-      return `    { "label": "${label}", "rank": <position>, "score": <1-10>, "reasoning": "<brief explanation>" }`;
     })
     .join(",\n");
 
@@ -108,7 +90,9 @@ ${ideasText}
 
 YOUR TASK:
 1. ${copy.taskLines[0]}
-2. Rank ALL ideas (${allIdeasList}) — including your own (you are Anonymous Model ${anonymousMap.get(judgeModelId)}) — from best to worst.
+2. In each critique entry, include that idea's final ranking position among ALL ideas.
+3. Critique, score, and rank all ${ideas.length} anonymous ideas.
+4. Use each rank from 1 to ${ideas.length} exactly once across the full set of ideas.
 
 Rules:
 ${copy.rules.map((line) => `- ${line}`).join("\n")}
@@ -117,9 +101,6 @@ ${copy.outputLeadIn}
 {
   "critiques": [
 ${critiqueJsonFields}
-  ],
-  "rankings": [
-${rankingJsonFields}
   ]
 }`;
 
@@ -195,7 +176,7 @@ ${formatIdeaContent(idea.content, category)}
   const rankingJsonFields = ideas
     .map((idea) => {
       const label = anonymousMap.get(idea.modelId)!;
-      return `    { "label": "${label}", "rank": <position>, "score": <1-10>, "reasoning": "<brief explanation>" }`;
+      return `    { "label": "${label}", "score": <1-10>, "rank": <position>, "reasoning": "<brief explanation>" }`;
     })
     .join(",\n");
 

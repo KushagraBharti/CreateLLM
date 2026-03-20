@@ -41,6 +41,12 @@ export default function ResultsView({ run, isLive, streamingText = {} }: Results
     [run.critiqueVotes]
   );
 
+  type CritiqueListEntry = {
+    critique: BenchmarkRun["critiqueVotes"][number]["critiques"][number];
+    fromModelId: string;
+    headingOverride?: string;
+  };
+
   const critiquedModels = useMemo(() => {
     const ids = new Set<string>();
     for (const vote of run.critiqueVotes) {
@@ -131,15 +137,36 @@ export default function ResultsView({ run, isLive, streamingText = {} }: Results
               {run.ideas
                 .filter((idea) => !critiqueFilter || idea.modelId === critiqueFilter)
                 .map((idea) => {
-                  const critiquesForIdea = run.critiqueVotes.flatMap((vote) =>
+                  const critiquesForIdea: CritiqueListEntry[] = run.critiqueVotes.flatMap((vote) =>
                     vote.critiques
                       .filter((critique) => critique.targetModelId === idea.modelId)
                       .map((critique) => ({ critique, fromModelId: vote.fromModelId }))
                   );
-                  const humanForIdea = run.humanCritiques
+                  const selfAssessment: CritiqueListEntry[] = run.critiqueVotes
+                    .filter((vote) => vote.fromModelId === idea.modelId)
+                    .flatMap((vote) => {
+                      const explicitSelfCritique = vote.critiques.some((critique) => critique.targetModelId === idea.modelId);
+                      if (explicitSelfCritique) return [];
+                      const selfRanking = vote.rankings.find((entry) => entry.modelId === idea.modelId);
+                      if (!selfRanking?.reasoning) return [];
+                      return [{
+                        critique: {
+                          ideaLabel: "",
+                          targetModelId: idea.modelId,
+                          strengths: selfRanking.reasoning,
+                          weaknesses: "",
+                          suggestions: "",
+                          score: selfRanking.score,
+                          ranking: selfRanking.rank,
+                        },
+                        fromModelId: vote.fromModelId,
+                        headingOverride: "Self Assessment",
+                      }];
+                    });
+                  const humanForIdea: CritiqueListEntry[] = run.humanCritiques
                     .filter((critique) => critique.targetModelId === idea.modelId)
                     .map((critique) => ({ critique, fromModelId: critique.authorLabel }));
-                  const allCritiques = [...critiquesForIdea, ...humanForIdea];
+                  const allCritiques = [...critiquesForIdea, ...selfAssessment, ...humanForIdea];
                   if (allCritiques.length === 0) return null;
 
                   return (
@@ -148,8 +175,13 @@ export default function ResultsView({ run, isLive, streamingText = {} }: Results
                         Critiques for <span style={{ color: getModelIdentity(idea.modelId).color }}>{getModelName(idea.modelId)}</span>
                       </p>
                       <div className="space-y-0">
-                        {allCritiques.map(({ critique, fromModelId }, index) => (
-                          <CritiqueCard key={`${fromModelId}-${critique.targetModelId}-${index}`} critique={critique} fromModelId={fromModelId} />
+                        {allCritiques.map(({ critique, fromModelId, headingOverride }, index) => (
+                          <CritiqueCard
+                            key={`${fromModelId}-${critique.targetModelId}-${index}-${headingOverride ?? "default"}`}
+                            critique={critique}
+                            fromModelId={fromModelId}
+                            headingOverride={headingOverride}
+                          />
                         ))}
                       </div>
                     </div>
@@ -189,7 +221,7 @@ export default function ResultsView({ run, isLive, streamingText = {} }: Results
 
         {activeTab === "final" && (
           <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="space-y-4">
-            <RankingDisplay rankings={run.finalRankings} title="Final Rankings - Revised Ideas" showPodium />
+            <RankingDisplay rankings={run.finalRankings} title="Final Rankings - Revised Ideas" showPodium showReasoning />
             {run.status !== "complete" && (
               <div className="border border-border rounded-xl p-4 bg-bg-surface/60">
                 <p className="label mb-2">Run Status</p>

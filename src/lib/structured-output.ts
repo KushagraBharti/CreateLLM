@@ -275,6 +275,7 @@ function normalizeCritiqueEntry(entry: Record<string, unknown>, labelToModel: Ma
     weaknesses: valueToString(entry.weaknesses),
     suggestions: valueToString(entry.suggestions),
     score: Math.max(1, Math.min(10, Math.round(Number(entry.score) || 5))),
+    ranking: Number.isNaN(Number(entry.ranking)) ? undefined : Math.max(1, Math.round(Number(entry.ranking))),
   };
 }
 
@@ -290,18 +291,53 @@ export function normalizeCritiqueVoteResponse(
   const parsed = tryParseJsonObject(raw);
   const rawCritiques = Array.isArray(parsed?.critiques) ? parsed.critiques : [];
   const rawRankings = Array.isArray(parsed?.rankings) ? parsed.rankings : [];
+  const critiques = rawCritiques
+    .map((entry) =>
+      entry && typeof entry === "object" ? normalizeCritiqueEntry(entry as Record<string, unknown>, labelToModel) : null
+    )
+    .filter((entry): entry is CritiqueEntry => Boolean(entry));
+
+  const legacyRankings = rawRankings
+    .map((entry) =>
+      entry && typeof entry === "object" ? normalizeRankingEntry(entry as Record<string, unknown>, labelToModel) : null
+    )
+    .filter((entry): entry is RankingEntry => Boolean(entry));
+
+  if (legacyRankings.length > 0) {
+    return {
+      critiques,
+      rankings: legacyRankings,
+    };
+  }
+
+  const inferredRankings: RankingEntry[] = critiques
+    .filter((entry) => typeof entry.ranking === "number" && Number.isFinite(entry.ranking))
+    .map((entry) => ({
+      modelId: entry.targetModelId,
+      rank: entry.ranking as number,
+      score: entry.score,
+      reasoning: `Strengths: ${entry.strengths}\nWeaknesses: ${entry.weaknesses}\nSuggestions: ${entry.suggestions}`,
+    }));
+
+  const targetedModels = new Set(inferredRankings.map((entry) => entry.modelId));
+  const remainingModels = [...anonymousMap.keys()].filter((modelId) => !targetedModels.has(modelId));
+  const usedRanks = new Set(inferredRankings.map((entry) => entry.rank));
+  const remainingRanks = Array.from({ length: anonymousMap.size }, (_, index) => index + 1).filter(
+    (rank) => !usedRanks.has(rank)
+  );
+
+  if (remainingModels.length === 1 && remainingRanks.length === 1) {
+    inferredRankings.push({
+      modelId: remainingModels[0],
+      rank: remainingRanks[0],
+      score: 5,
+      reasoning: "Self ranking inferred from critique schema.",
+    });
+  }
 
   return {
-    critiques: rawCritiques
-      .map((entry) =>
-        entry && typeof entry === "object" ? normalizeCritiqueEntry(entry as Record<string, unknown>, labelToModel) : null
-      )
-      .filter((entry): entry is CritiqueEntry => Boolean(entry)),
-    rankings: rawRankings
-      .map((entry) =>
-        entry && typeof entry === "object" ? normalizeRankingEntry(entry as Record<string, unknown>, labelToModel) : null
-      )
-      .filter((entry): entry is RankingEntry => Boolean(entry)),
+    critiques,
+    rankings: inferredRankings,
   };
 }
 

@@ -41,12 +41,14 @@ import {
   REASONING_REVISE,
   REASONING_VOTE,
 } from "./prompt-runtime";
+import { appendPromptCapture, PromptCaptureStage } from "./prompt-capture";
 
 const ANONYMOUS_LABELS = ["A", "B", "C", "D", "E", "F", "G", "H"];
 
 interface JsonRetryOptions {
   retryOnInvalidJson?: boolean;
   acceptPartialResponse?: boolean;
+  onBeforeRequest?: (requestBody: Record<string, unknown>, attempt: "initial" | "retry") => Promise<void> | void;
 }
 
 export interface BenchmarkRuntimeControls {
@@ -131,11 +133,20 @@ function isValidCritiqueVoteJson(raw: string): boolean {
     const jsonMatch = raw.match(/\{[\s\S]*\}/);
     if (jsonMatch) {
       const parsed = JSON.parse(jsonMatch[0]);
+      const hasCritiques = Array.isArray(parsed.critiques) && parsed.critiques.length > 0;
+      const hasLegacyRankings = Array.isArray(parsed.rankings) && parsed.rankings.length > 0;
+      const hasInlineRankings =
+        hasCritiques &&
+        parsed.critiques.every(
+          (critique: Record<string, unknown>) =>
+            critique &&
+            typeof critique === "object" &&
+            typeof critique.ideaLabel === "string" &&
+            Number.isFinite(Number(critique.ranking))
+        );
       return (
-        Array.isArray(parsed.critiques) &&
-        parsed.critiques.length > 0 &&
-        Array.isArray(parsed.rankings) &&
-        parsed.rankings.length > 0
+        hasCritiques &&
+        (hasLegacyRankings || hasInlineRankings)
       );
     }
   } catch {
@@ -165,11 +176,12 @@ async function callModelWithJsonRetry(
   signal?: AbortSignal,
   options: JsonRetryOptions = {}
 ): Promise<string> {
-  const { retryOnInvalidJson = true } = options;
+  const { retryOnInvalidJson = true, onBeforeRequest } = options;
   const raw = await callModel(openRouterId, messages, {
     reasoning,
     timeoutMs: MODEL_TIMEOUT_MS,
     signal,
+    onBeforeRequest: (requestBody) => onBeforeRequest?.(requestBody, "initial"),
   });
 
   if (validateFn(raw) || !retryOnInvalidJson) return raw;
@@ -185,6 +197,7 @@ async function callModelWithJsonRetry(
       reasoning,
       timeoutMs: MODEL_TIMEOUT_MS,
       signal,
+      onBeforeRequest: (requestBody) => onBeforeRequest?.(requestBody, "retry"),
     }
   );
 }
@@ -198,7 +211,7 @@ async function streamModelAndCollect(
   onChunk?: (chunk: string) => void,
   options: JsonRetryOptions = {}
 ): Promise<string> {
-  const { acceptPartialResponse = false, retryOnInvalidJson = true } = options;
+  const { acceptPartialResponse = false, retryOnInvalidJson = true, onBeforeRequest } = options;
   let accumulated = "";
 
   try {
@@ -206,6 +219,7 @@ async function streamModelAndCollect(
       reasoning,
       timeoutMs: MODEL_TIMEOUT_MS,
       signal,
+      onBeforeRequest: (requestBody) => onBeforeRequest?.(requestBody, "initial"),
     })) {
       accumulated += chunk;
       onChunk?.(chunk);
@@ -216,6 +230,7 @@ async function streamModelAndCollect(
     }
     return callModelWithJsonRetry(openRouterId, messages, reasoning, validateFn, signal, {
       retryOnInvalidJson,
+      onBeforeRequest,
     });
   }
 
@@ -236,8 +251,34 @@ async function streamModelAndCollect(
       reasoning,
       timeoutMs: MODEL_TIMEOUT_MS,
       signal,
+      onBeforeRequest: (requestBody) => onBeforeRequest?.(requestBody, "retry"),
     }
   );
+}
+
+function createPromptCaptureLogger(
+  runId: string,
+  stage: PromptCaptureStage,
+  modelId: string,
+  openRouterId: string,
+  reasoning: ReasoningConfig,
+  stream: boolean,
+  messages: ChatMessage[]
+) {
+  return async (requestBody: Record<string, unknown>, attempt: "initial" | "retry") => {
+    await appendPromptCapture({
+      runId,
+      stage,
+      modelId,
+      openRouterId,
+      timestamp: new Date().toISOString(),
+      attempt,
+      stream,
+      reasoning,
+      messages,
+      requestBody,
+    });
+  };
 }
 
 function createFailure(
@@ -363,7 +404,22 @@ async function runGenerateStage(
         isValidIdeaJson,
         abortController.signal,
         (chunk) => getRunEventBus().publishToken(current.id, model.id, "generate", chunk),
-        { acceptPartialResponse: true, retryOnInvalidJson: false }
+        {
+          acceptPartialResponse: true,
+          retryOnInvalidJson: false,
+          onBeforeRequest: createPromptCaptureLogger(
+            current.id,
+            "generate",
+            model.id,
+            model.openRouterId,
+            REASONING_GENERATE,
+            true,
+            [
+              { role: "system", content: generatePrompt.system },
+              { role: "user", content: generatePrompt.user },
+            ]
+          ),
+        }
       );
       const idea: Idea = {
         modelId: model.id,
@@ -474,16 +530,28 @@ async function runCritiqueStage(
       anonymousMap
     );
     const abortController = controls.createAbortController(`critique:${judgeIdea.modelId}`);
+    const messages: ChatMessage[] = [
+      { role: "system", content: system },
+      { role: "user", content: user },
+    ];
     try {
       const raw = await callModelWithJsonRetry(
         model.openRouterId,
-        [
-          { role: "system", content: system },
-          { role: "user", content: user },
-        ],
+        messages,
         REASONING_CRITIQUE,
         isValidCritiqueVoteJson,
-        abortController.signal
+        abortController.signal,
+        {
+          onBeforeRequest: createPromptCaptureLogger(
+            current.id,
+            "critique",
+            judgeIdea.modelId,
+            model.openRouterId,
+            REASONING_CRITIQUE,
+            false,
+            messages
+          ),
+        }
       );
       const parsed = parseCritiqueVoteJson(raw, anonymousMap);
       return {
@@ -593,18 +661,31 @@ async function runRevisionStage(
 
     const { system, user } = buildRevisionPrompt(idea, critiquesForIdea, category, current.prompt);
     const abortController = controls.createAbortController(`revise:${idea.modelId}`);
+    const messages: ChatMessage[] = [
+      { role: "system", content: system },
+      { role: "user", content: user },
+    ];
     try {
       const raw = await streamModelAndCollect(
         model.openRouterId,
-        [
-          { role: "system", content: system },
-          { role: "user", content: user },
-        ],
+        messages,
         REASONING_REVISE,
         isValidIdeaJson,
         abortController.signal,
         (chunk) => getRunEventBus().publishToken(current.id, idea.modelId, "revise", chunk),
-        { acceptPartialResponse: true, retryOnInvalidJson: false }
+        {
+          acceptPartialResponse: true,
+          retryOnInvalidJson: false,
+          onBeforeRequest: createPromptCaptureLogger(
+            current.id,
+            "revise",
+            idea.modelId,
+            model.openRouterId,
+            REASONING_REVISE,
+            true,
+            messages
+          ),
+        }
       );
       return {
         modelId: idea.modelId,
@@ -710,16 +791,28 @@ async function runVotingStage(
       anonymousMap
     );
     const abortController = controls.createAbortController(`vote:${judgeIdea.modelId}`);
+    const messages: ChatMessage[] = [
+      { role: "system", content: system },
+      { role: "user", content: user },
+    ];
     try {
       const raw = await callModelWithJsonRetry(
         model.openRouterId,
-        [
-          { role: "system", content: system },
-          { role: "user", content: user },
-        ],
+        messages,
         REASONING_VOTE,
         isValidFinalVoteJson,
-        abortController.signal
+        abortController.signal,
+        {
+          onBeforeRequest: createPromptCaptureLogger(
+            current.id,
+            "vote",
+            judgeIdea.modelId,
+            model.openRouterId,
+            REASONING_VOTE,
+            false,
+            messages
+          ),
+        }
       );
       return {
         modelId: judgeIdea.modelId,
