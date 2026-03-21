@@ -3,7 +3,7 @@ import type { NextConfig } from "next";
 const isVercelBuild = process.env.VERCEL === "1";
 
 const nextConfig: NextConfig = {
-  // Vercel expects the default `.next` output directory during deployment.
+  // Vercel expects the default `.next` output directory during deployment. Testing
   distDir: isVercelBuild ? ".next" : ".next-build",
   async redirects() {
     return [
