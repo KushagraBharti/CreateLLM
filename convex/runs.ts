@@ -1354,6 +1354,52 @@ export const getRunBundleInternal = internalQuery({
   },
 });
 
+export const getWorkflowBundleInternal = internalQuery({
+  args: { runId: v.id("runs") },
+  returns: v.any(),
+  handler: async (ctx, args) => {
+    const run = await ctx.db.get(args.runId);
+    if (!run) {
+      throw new ConvexError("Run not found");
+    }
+
+    const participants = await ctx.db
+      .query("runParticipants")
+      .withIndex("by_run", (q) => q.eq("runId", run._id))
+      .collect();
+
+    return {
+      run: {
+        _id: run._id,
+        categoryId: run.categoryId,
+        selectedModels: run.selectedModels,
+        status: run.status,
+        currentStep: run.currentStep,
+        checkpointStage: run.checkpointStage,
+        minimumSuccessfulModels: run.minimumSuccessfulModels,
+        cancellationRequested: run.cancellationRequested,
+        pauseRequested: run.pauseRequested,
+      },
+      participants: participants.map((participant) => ({
+        _id: participant._id,
+        modelId: participant.modelId,
+        modelName: participant.modelName,
+        order: participant.order,
+        stage: participant.stage,
+        status: participant.status,
+        generatedIdea: participant.generatedIdea ? true : false,
+        critiqueResult: participant.critiqueResult
+          ? {
+              rankings: participant.critiqueResult.rankings,
+            }
+          : undefined,
+        revisedIdea: participant.revisedIdea ? true : false,
+        finalRanking: participant.finalRanking,
+      })),
+    };
+  },
+});
+
 export const insertArtifactInternal = internalMutation({
   args: {
     runId: v.id("runs"),

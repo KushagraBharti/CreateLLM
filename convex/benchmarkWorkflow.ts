@@ -64,12 +64,12 @@ function computeWinningModel(bundle: any) {
 }
 
 async function maybeWaitWhilePaused(step: any, runId: string) {
-  const bundle = await step.runQuery(internal.runs.getRunBundleInternal, { runId: runId as never });
+  const bundle = await step.runQuery(internal.runs.getWorkflowBundleInternal, { runId: runId as never });
   if (!bundle.run.pauseRequested) {
     return bundle;
   }
   await step.awaitEvent({ name: RUN_RESUME_EVENT });
-  return await step.runQuery(internal.runs.getRunBundleInternal, { runId: runId as never });
+  return await step.runQuery(internal.runs.getWorkflowBundleInternal, { runId: runId as never });
 }
 
 async function failForLowQuorum(step: any, args: {
@@ -94,7 +94,7 @@ export const runBenchmarkWorkflow = workflow.define({
   returns: v.null(),
   handler: async (step, args): Promise<null> => {
     try {
-      let bundle = await step.runQuery(internal.runs.getRunBundleInternal, { runId: args.runId });
+      let bundle = await step.runQuery(internal.runs.getWorkflowBundleInternal, { runId: args.runId });
       if (bundle.run.cancellationRequested || bundle.run.status === "canceled") {
         return null;
       }
@@ -123,7 +123,7 @@ export const runBenchmarkWorkflow = workflow.define({
         ),
       );
 
-      bundle = await step.runQuery(internal.runs.getRunBundleInternal, { runId: args.runId });
+      bundle = await step.runQuery(internal.runs.getWorkflowBundleInternal, { runId: args.runId });
       let survivors = bundle.participants.filter(
         (participant: any) =>
           participant.generatedIdea && participant.status !== "failed" && participant.status !== "canceled",
@@ -161,7 +161,7 @@ export const runBenchmarkWorkflow = workflow.define({
         ),
       );
 
-      bundle = await step.runQuery(internal.runs.getRunBundleInternal, { runId: args.runId });
+      bundle = await step.runQuery(internal.runs.getWorkflowBundleInternal, { runId: args.runId });
       survivors = bundle.participants.filter(
         (participant: any) =>
           participant.generatedIdea &&
@@ -221,7 +221,7 @@ export const runBenchmarkWorkflow = workflow.define({
         ),
       );
 
-      bundle = await step.runQuery(internal.runs.getRunBundleInternal, { runId: args.runId });
+      bundle = await step.runQuery(internal.runs.getWorkflowBundleInternal, { runId: args.runId });
       survivors = bundle.participants.filter(
         (participant: any) =>
           participant.revisedIdea && participant.status !== "failed" && participant.status !== "canceled",
@@ -259,7 +259,7 @@ export const runBenchmarkWorkflow = workflow.define({
         ),
       );
 
-      bundle = await step.runQuery(internal.runs.getRunBundleInternal, { runId: args.runId });
+      bundle = await step.runQuery(internal.runs.getWorkflowBundleInternal, { runId: args.runId });
       const finalJudges = bundle.participants.filter(
         (participant: any) =>
           participant.finalRanking && participant.status !== "failed" && participant.status !== "canceled",

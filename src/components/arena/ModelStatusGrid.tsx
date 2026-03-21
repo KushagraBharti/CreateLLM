@@ -70,8 +70,51 @@ export default function ModelStatusGrid({
 }) {
   const modelIds = run?.selectedModels.map((model) => model.id) ?? getModelOrder();
 
+  function getStageLabel(
+    stageStatus: "waiting" | "thinking" | "done" | "failed" | "paused" | "retrying" | "canceled"
+  ) {
+    switch (stageStatus) {
+      case "done":
+        return "Done";
+      case "paused":
+        return "Paused";
+      case "retrying":
+        return "Retry queued";
+      case "failed":
+        return "Failed";
+      case "canceled":
+        return "Canceled";
+      case "thinking":
+        return "Working";
+      default:
+        return "Waiting";
+    }
+  }
+
+  function getStageCopy(
+    stageStatus: "waiting" | "thinking" | "done" | "failed" | "paused" | "retrying" | "canceled"
+  ) {
+    switch (stageStatus) {
+      case "done":
+        return "Stage completed.";
+      case "paused":
+        return "Execution is paused.";
+      case "retrying":
+        return "Retry attempt queued.";
+      case "failed":
+        return "Execution failed.";
+      case "canceled":
+        return "Execution canceled.";
+      case "thinking":
+        return "Currently processing.";
+      default:
+        return "Waiting for this stage.";
+    }
+  }
+
   return (
-    <div className="border-t border-border/70">
+    <div className="border-y border-border/70">
+      <div className="grid gap-px bg-border/60 sm:grid-cols-2 xl:grid-cols-4">
       {modelIds.map((modelId) => {
         const model = getModelIdentity(modelId);
         const stageStatus = getModelStageStatus(modelId, run, status);
@@ -83,9 +126,12 @@ export default function ModelStatusGrid({
             : controlState?.note;
 
         return (
-          <div key={modelId} className="flex items-start gap-3 border-b border-border/60 py-4">
+          <article
+            key={modelId}
+            className="relative min-w-0 bg-background px-4 py-4 sm:px-5"
+          >
             <span
-              className="w-1.5 h-1.5 rounded-full flex-shrink-0 transition-colors duration-300"
+              className="absolute left-0 top-0 h-px w-full transition-colors duration-300"
               style={{
                 backgroundColor:
                   stageStatus === "done"
@@ -94,62 +140,72 @@ export default function ModelStatusGrid({
                       ? "#C9A84C"
                       : stageStatus === "retrying"
                         ? "#7AA2F7"
-                    : stageStatus === "failed"
-                      ? "#c75050"
-                      : stageStatus === "canceled"
-                        ? "#8A8A8A"
-                      : stageStatus === "thinking"
-                        ? model.color
-                        : "var(--color-border)",
+                        : stageStatus === "failed"
+                          ? "#c75050"
+                          : stageStatus === "canceled"
+                            ? "#8A8A8A"
+                            : stageStatus === "thinking"
+                              ? model.color
+                              : "var(--color-border)",
+                opacity: stageStatus === "waiting" ? 0.55 : 1,
                 ...(stageStatus === "thinking"
                   ? { animation: "pulse-dot 1.5s ease-in-out infinite" }
                   : {}),
               }}
             />
 
-            <div className="min-w-0 flex-1">
-              <div className="flex flex-wrap items-center justify-between gap-3">
-                <span className="text-base text-text-primary block truncate">{model.name}</span>
-                <span className="font-mono text-[11px] uppercase tracking-[0.18em] text-text-muted">
-                  {stageStatus === "done"
-                    ? "Done"
-                    : stageStatus === "paused"
-                      ? "Paused"
-                      : stageStatus === "retrying"
-                        ? "Retry queued"
-                        : stageStatus === "failed"
-                          ? "Failed"
-                          : stageStatus === "canceled"
-                            ? "Canceled"
-                            : stageStatus === "thinking"
-                              ? "Working"
-                              : "Waiting"}
+            <div className="mb-6 flex items-start justify-between gap-4">
+              <div className="min-w-0 space-y-2">
+                <p className="font-mono text-[10px] uppercase tracking-[0.24em] text-text-muted/80">
+                  {model.provider}
+                </p>
+                <h3 className="text-[1.05rem] leading-tight text-text-primary">
+                  {model.name}
+                </h3>
+              </div>
+              <div className="flex items-center gap-2 whitespace-nowrap">
+                <span
+                  className="h-1.5 w-1.5 flex-shrink-0"
+                  style={{
+                    backgroundColor:
+                      stageStatus === "done"
+                        ? "#6bbf7b"
+                        : stageStatus === "paused"
+                          ? "#C9A84C"
+                          : stageStatus === "retrying"
+                            ? "#7AA2F7"
+                            : stageStatus === "failed"
+                              ? "#c75050"
+                              : stageStatus === "canceled"
+                                ? "#8A8A8A"
+                                : stageStatus === "thinking"
+                                  ? model.color
+                                  : "var(--color-border)",
+                    ...(stageStatus === "thinking"
+                      ? { animation: "pulse-dot 1.5s ease-in-out infinite" }
+                      : {}),
+                  }}
+                />
+                <span className="font-mono text-[10px] uppercase tracking-[0.22em] text-text-muted">
+                  {getStageLabel(stageStatus)}
                 </span>
               </div>
+            </div>
+
+            <div className="border-t border-border/60 pt-3">
               <p className="text-sm text-text-muted">
-                {stageStatus === "done"
-                  ? "Stage completed."
-                  : stageStatus === "paused"
-                    ? "Execution is paused."
-                    : stageStatus === "retrying"
-                      ? "Retry attempt queued."
-                      : stageStatus === "failed"
-                        ? "Execution failed."
-                        : stageStatus === "canceled"
-                          ? "Execution canceled."
-                          : stageStatus === "thinking"
-                            ? "Currently processing."
-                            : "Waiting for this stage."}
+                {getStageCopy(stageStatus)}
               </p>
               {statusNote && (
-                <p className="mt-1 text-xs leading-relaxed text-text-muted max-w-[26ch]">
+                <p className="mt-3 max-w-[24ch] text-xs leading-relaxed text-text-muted">
                   {statusNote}
                 </p>
               )}
             </div>
-          </div>
+          </article>
         );
       })}
+      </div>
     </div>
   );
 }
