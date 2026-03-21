@@ -1,12 +1,19 @@
 "use client";
 
-import { useState } from "react";
-import { motion, AnimatePresence } from "framer-motion";
+import { useMemo, useState } from "react";
+import { motion } from "framer-motion";
+import { clsx } from "clsx";
 import { getModelCatalog } from "@/lib/models";
 
 export default function ContendersGrid() {
   const models = getModelCatalog();
-  const [expanded, setExpanded] = useState<string | null>(models[0]?.id ?? null);
+  const [activeLab, setActiveLab] = useState<string>("all");
+  const labs = useMemo(
+    () => ["all", ...Array.from(new Set(models.map((model) => model.lab))).sort()],
+    [models],
+  );
+  const filteredModels =
+    activeLab === "all" ? models : models.filter((model) => model.lab === activeLab);
 
   return (
     <section className="py-28 px-6 border-t border-border">
@@ -19,65 +26,65 @@ export default function ContendersGrid() {
           OpenRouter is the only model access layer. The catalog mixes flagship, reasoning, fast, and mini tiers across leading labs, while still letting you bring your own model IDs.
         </p>
 
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          {models.map((model) => {
-            const isExpanded = expanded === model.id;
+        <div className="mb-8 flex flex-wrap items-center gap-3 border-b border-border/70 pb-4">
+          {labs.map((lab) => (
+            <button
+              key={lab}
+              type="button"
+              onClick={() => setActiveLab(lab)}
+              className={clsx(
+                "text-sm uppercase tracking-[0.18em] transition-colors",
+                activeLab === lab
+                  ? "text-text-primary"
+                  : "text-text-muted hover:text-text-secondary",
+              )}
+            >
+              {lab === "all" ? "All labs" : lab}
+            </button>
+          ))}
+        </div>
+
+        <div className="grid grid-cols-1 gap-px bg-border sm:grid-cols-2 lg:grid-cols-4">
+          {filteredModels.map((model, index) => {
             return (
-              <button
+              <motion.div
                 key={model.id}
-                type="button"
-                onClick={() => setExpanded(isExpanded ? null : model.id)}
-                className="text-left border border-border rounded-2xl bg-bg-surface/70 p-5 hover:bg-bg-elevated/60 transition-colors"
+                initial={{ opacity: 0 }}
+                whileInView={{ opacity: 1 }}
+                viewport={{ once: true, margin: "-40px" }}
+                transition={{ duration: 0.35, delay: index * 0.03 }}
               >
-                <div className="flex items-start justify-between gap-4">
+                <div className="group flex h-full flex-col justify-between bg-bg-deep p-6 transition-colors hover:bg-bg-surface">
                   <div>
-                    <div className="flex items-center gap-2">
-                      <span className="w-2 h-2 rounded-full" style={{ backgroundColor: model.color }} />
-                      <span className="text-text-primary text-lg font-medium">{model.name}</span>
+                    <div className="mb-5 flex items-start justify-between gap-4">
+                      <span className="font-mono text-sm text-text-muted">
+                        {String(index + 1).padStart(2, "0")}
+                      </span>
+                      <span
+                        className="h-1.5 w-1.5 rounded-full opacity-50 transition-opacity group-hover:opacity-100"
+                        style={{ backgroundColor: model.color }}
+                      />
                     </div>
-                    <p className="text-base text-text-muted mt-1">
+
+                    <h3 className="font-display text-2xl leading-tight text-text-primary transition-colors group-hover:text-accent">
+                      {model.name}
+                    </h3>
+                    <p className="mt-2 text-sm uppercase tracking-[0.18em] text-text-muted">
                       {model.lab} · {model.tier}
                     </p>
+                    <p className="mt-5 text-base leading-relaxed text-text-secondary">
+                      {model.description}
+                    </p>
                   </div>
-                  <span className="text-sm font-mono text-text-secondary">
-                    {isExpanded ? "Hide" : "Open"}
-                  </span>
+
+                  <div className="mt-8 flex items-center justify-between border-t border-border/70 pt-4 text-sm">
+                    <span className="text-text-muted">{model.provider}</span>
+                    <span className="text-text-muted">
+                      {model.defaultEnabled ? "Default roster" : "Optional pick"}
+                    </span>
+                  </div>
                 </div>
-
-                <p className="text-base text-text-secondary mt-4">{model.description}</p>
-
-                <AnimatePresence initial={false}>
-                  {isExpanded && (
-                    <motion.div
-                      initial={{ opacity: 0, height: 0 }}
-                      animate={{ opacity: 1, height: "auto" }}
-                      exit={{ opacity: 0, height: 0 }}
-                      className="overflow-hidden"
-                    >
-                      <div className="pt-4 mt-4 border-t border-border/70 space-y-3">
-                        <p className="text-sm text-text-muted italic">“{model.personality}”</p>
-                        <div className="flex flex-wrap gap-2">
-                          {model.tags.map((tag) => (
-                            <span key={tag} className="text-xs px-2 py-1 rounded-full border border-border text-text-muted">
-                              {tag}
-                            </span>
-                          ))}
-                        </div>
-                        <div className="grid grid-cols-2 gap-3 text-sm">
-                          <div className="rounded-xl border border-border/70 p-3 bg-bg-deep/60">
-                            <p className="label mb-1">Provider</p>
-                            <p className="text-text-secondary">{model.provider}</p>
-                          </div>
-                          <div className="rounded-xl border border-border/70 p-3 bg-bg-deep/60">
-                            <p className="label mb-1">Default</p>
-                            <p className="text-text-secondary">{model.defaultEnabled ? "Enabled" : "Optional"}</p>
-                          </div>
-                        </div>
-                      </div>
-                    </motion.div>
-                  )}
-                </AnimatePresence>
-              </button>
+              </motion.div>
             );
           })}
         </div>

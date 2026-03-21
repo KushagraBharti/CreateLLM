@@ -10,38 +10,51 @@ export default function RouteLoading({
   subtitle?: string;
 }) {
   return (
-    <div className="max-w-5xl mx-auto px-6 py-16 min-h-[60vh] flex items-center">
+    <div className="mx-auto flex min-h-[52vh] max-w-6xl items-center px-6 py-16">
       <motion.div
-        initial={{ opacity: 0, y: 10 }}
+        initial={{ opacity: 0, y: 12 }}
         animate={{ opacity: 1, y: 0 }}
-        className="w-full border border-border rounded-[28px] bg-[radial-gradient(circle_at_top_left,rgba(212,159,102,0.12),transparent_36%),radial-gradient(circle_at_bottom_right,rgba(123,147,168,0.12),transparent_34%)] bg-bg-deep p-8"
+        className="w-full border-t border-border pt-10"
       >
-        <div className="flex items-center gap-4 mb-6">
-          <div className="relative h-12 w-12 rounded-full border border-border bg-bg-surface/80 overflow-hidden">
-            <motion.div
-              initial={{ x: "-100%" }}
-              animate={{ x: "180%" }}
-              transition={{ repeat: Number.POSITIVE_INFINITY, duration: 1.8, ease: "easeInOut" }}
-              className="absolute inset-y-0 w-1/2 bg-[linear-gradient(90deg,transparent,rgba(232,228,222,0.45),transparent)]"
-            />
+        <div className="grid gap-10 lg:grid-cols-[1.05fr_0.95fr]">
+          <div className="max-w-2xl">
+            <p className="label mb-5">{title}</p>
+            <h2 className="font-display text-[clamp(2.8rem,6vw,4.75rem)] leading-[0.94] text-text-primary">
+              Transitioning
+              <br />
+              to the next surface.
+            </h2>
+            <p className="mt-6 text-lg leading-relaxed text-text-secondary">
+              {subtitle}
+            </p>
           </div>
-          <div>
-            <p className="label mb-2">{title}</p>
-            <p className="text-base text-text-muted">{subtitle}</p>
-          </div>
-        </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-          {[0, 1, 2].map((index) => (
-            <div key={index} className="rounded-2xl border border-border bg-bg-surface/60 p-4">
-              <div className="h-3 w-20 rounded-full bg-border/70 mb-4" />
-              <div className="space-y-2">
-                <div className="h-3 rounded-full bg-border/50" />
-                <div className="h-3 rounded-full bg-border/40 w-5/6" />
-                <div className="h-3 rounded-full bg-border/30 w-2/3" />
+          <div className="grid gap-px border border-border bg-border">
+            {[0, 1, 2].map((index) => (
+              <div key={index} className="bg-bg-deep px-5 py-6">
+                <div className="mb-4 flex items-center justify-between">
+                  <span className="font-mono text-sm text-text-muted">
+                    {String(index + 1).padStart(2, "0")}
+                  </span>
+                  <motion.span
+                    animate={{ opacity: [0.25, 1, 0.25] }}
+                    transition={{
+                      repeat: Number.POSITIVE_INFINITY,
+                      duration: 1.6,
+                      delay: index * 0.16,
+                      ease: "easeInOut",
+                    }}
+                    className="h-1.5 w-1.5 rounded-full bg-accent"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <div className="h-px w-full bg-border/70" />
+                  <div className="h-px w-5/6 bg-border/50" />
+                  <div className="h-px w-2/3 bg-border/40" />
+                </div>
               </div>
-            </div>
-          ))}
+            ))}
+          </div>
         </div>
       </motion.div>
     </div>
