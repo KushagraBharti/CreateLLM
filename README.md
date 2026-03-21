@@ -128,8 +128,7 @@ bun install
 2. Create your environment file from the example and add the Convex and auth settings needed for local development:
 
 ```text
-NEXT_PUBLIC_CONVEX_URL=your_convex_deployment_url
-CONVEX_DEPLOYMENT=your_convex_deployment_name
+NEXT_PUBLIC_CONVEX_URL=https://glorious-moose-513.convex.cloud
 AUTH_SECRET=your_auth_secret
 ```
 
@@ -146,19 +145,25 @@ bun run dev
 - `bun run start` - run the production server
 - `bun run lint` - run lint checks
 - `bun run test` - run the Vitest suite
-- `bunx convex dev --once` - validate the Convex backend and push schema changes
+- `bunx convex codegen` - regenerate Convex types
+- `bunx convex deploy -y` - deploy to the production Convex backend
 
 ## Environment
 
 The app requires local Convex/auth configuration to boot the web app. Provider credentials are BYOK and are stored through the in-app settings flow instead of being shared as global server keys.
 
-Typical local variables include:
+Typical app variables include:
 
 - `NEXT_PUBLIC_CONVEX_URL`
-- `CONVEX_DEPLOYMENT`
 - `AUTH_SECRET`
-- OAuth provider credentials for Google and GitHub
-- Convex server-side encryption material for provider key storage
+- GitHub OAuth credentials
+
+Convex production variables are managed separately in Convex:
+
+- `AUTH_GITHUB_ID`
+- `AUTH_GITHUB_SECRET`
+- `PROVIDER_VAULT_MASTER_KEY`
+- `LEGACY_MIGRATION_SECRET`
 
 ## Notes
 

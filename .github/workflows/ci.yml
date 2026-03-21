@@ -9,9 +9,7 @@ jobs:
   validate:
     runs-on: ubuntu-latest
     env:
-      NEXT_PUBLIC_CONVEX_URL: https://example.convex.cloud
-      CONVEX_DEPLOYMENT: ci
-      CONVEX_SITE_URL: https://example.convex.cloud
+      NEXT_PUBLIC_CONVEX_URL: https://glorious-moose-513.convex.cloud
       AUTH_SECRET: test-secret
       AUTH_GITHUB_ID: test-github-id
       AUTH_GITHUB_SECRET: test-github-secret
