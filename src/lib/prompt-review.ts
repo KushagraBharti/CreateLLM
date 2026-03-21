@@ -14,7 +14,7 @@ import {
   buildGeneratePrompt,
   buildRevisionPrompt,
 } from "./prompts";
-import { formatPriorSourceSummary } from "./web-search";
+import { formatPriorSourceSummary } from "./benchmark-web";
 
 const ANONYMOUS_LABELS = ["A", "B", "C", "D", "E", "F", "G", "H"];
 

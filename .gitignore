@@ -16,6 +16,7 @@
 # next.js
 /.next/
 .next-build
+.next-foundation
 /out/
 .next-foundation
 
@@ -75,6 +76,3 @@ skills/
 
 # convex ai setup state
 convex/_generated/ai/*.state.json
-convex/_generated/api.*
-convex/_generated/dataModel.*
-convex/_generated/server.*

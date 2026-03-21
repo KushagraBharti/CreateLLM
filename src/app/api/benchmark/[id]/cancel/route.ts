@@ -1,5 +1,5 @@
 import { NextRequest } from "next/server";
-import { cancelBenchmarkRun } from "@/lib/run-scheduler";
+import { cancelBenchmarkRunServer } from "@/lib/convex-server";
 
 export async function POST(
   request: NextRequest,
@@ -7,6 +7,6 @@ export async function POST(
 ) {
   const { id } = await params;
   const body = await request.json().catch(() => ({}));
-  const run = await cancelBenchmarkRun(id, typeof body.reason === "string" ? body.reason : undefined);
+  const run = await cancelBenchmarkRunServer(id, typeof body.reason === "string" ? body.reason : undefined);
   return Response.json(run);
 }

@@ -289,6 +289,7 @@ export function resolveSelectedModels(
   customModelIds: string[] = []
 ): ModelCatalogEntry[] {
   const counts = new Map<string, number>();
+  const selectedOpenRouterIds = new Set<string>();
   const resolved: ModelCatalogEntry[] = [];
 
   for (const id of selectedModelIds) {
@@ -296,11 +297,13 @@ export function resolveSelectedModels(
     if (!model) continue;
     const ordinal = (counts.get(model.openRouterId) ?? 0) + 1;
     counts.set(model.openRouterId, ordinal);
+    selectedOpenRouterIds.add(model.openRouterId.toLowerCase());
     resolved.push(cloneModelEntry(model, ordinal));
   }
 
   for (const id of customModelIds) {
     if (!isValidOpenRouterModelId(id)) continue;
+    if (selectedOpenRouterIds.has(id.trim().toLowerCase())) continue;
     const model = createBringYourOwnModel(id);
     const ordinal = (counts.get(model.openRouterId) ?? 0) + 1;
     counts.set(model.openRouterId, ordinal);

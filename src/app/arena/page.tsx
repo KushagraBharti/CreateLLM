@@ -2,6 +2,7 @@
 
 import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
+import { useConvexAuth } from "convex/react";
 import { motion, AnimatePresence } from "framer-motion";
 import { categories } from "@/lib/categories";
 import { getDefaultModels } from "@/lib/models";
@@ -27,6 +28,7 @@ export default function ArenaPage() {
 function ArenaContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
+  const { isAuthenticated, isLoading } = useConvexAuth();
   const [redirectTarget, setRedirectTarget] = useState<string | null>(null);
   const initialCategory = searchParams.get("category") || categories[0].id;
   const [categoryId, setCategoryId] = useState(initialCategory);
@@ -52,10 +54,6 @@ function ArenaContent() {
     proceedBenchmark,
     resumeBenchmark,
     restartBenchmark,
-    pauseModel,
-    resumeModel,
-    retryModel,
-    cancelModel,
     submitHumanCritiques,
     streamingText,
     toolActivity,
@@ -68,6 +66,15 @@ function ArenaContent() {
     }
     prevStatusRef.current = status;
   }, [status, result]);
+
+  useEffect(() => {
+    if (isLoading || isAuthenticated) {
+      return;
+    }
+    const query = searchParams.toString();
+    const redirect = query ? `/arena?${query}` : "/arena";
+    router.replace(`/sign-in?redirect=${encodeURIComponent(redirect)}`);
+  }, [isAuthenticated, isLoading, router, searchParams]);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -153,6 +160,15 @@ function ArenaContent() {
       <RouteLoading
         title="Opening run"
         subtitle="Moving this benchmark into its dedicated live workspace."
+      />
+    );
+  }
+
+  if (isLoading || !isAuthenticated) {
+    return (
+      <RouteLoading
+        title="Checking access"
+        subtitle="The arena is only available after sign in."
       />
     );
   }
@@ -255,10 +271,6 @@ function ArenaContent() {
                       router.push(`/arena/${next.id}`);
                     }
                   }}
-                  onPauseModel={(modelId) => pauseModel(modelId)}
-                  onResumeModel={(modelId) => resumeModel(modelId)}
-                  onRetryModel={(modelId) => retryModel(modelId)}
-                  onCancelModel={(modelId) => cancelModel(modelId)}
                 />
               )}
 

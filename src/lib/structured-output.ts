@@ -192,7 +192,7 @@ function extractLabeledFields(raw: string, category?: Category): Record<string, 
       .slice(index + 1)
       .map((entry) => entry.label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
     const terminator =
-      laterLabels.length > 0 ? `(?=\\n(?:${laterLabels.join("|")}):)` : `(?=$)`;
+      laterLabels.length > 0 ? `(?=\\n(?:${laterLabels.join("|")}):|$)` : `(?=$)`;
     const pattern = new RegExp(`(?:^|\\n)${label}:?\\s*([\\s\\S]*?)${terminator}`, "i");
     const match = text.match(pattern);
     if (!match) return;

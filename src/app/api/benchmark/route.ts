@@ -1,12 +1,10 @@
 import { NextRequest } from "next/server";
-import { createAndQueueRun, ensureSchedulerBootstrapped } from "@/lib/run-scheduler";
 import { getDefaultModels } from "@/lib/models";
+import { createBenchmarkRun } from "@/lib/convex-server";
 
 export const maxDuration = 60;
 
 export async function POST(request: NextRequest) {
-  await ensureSchedulerBootstrapped();
-
   const body = await request.json();
   const categoryId = body.categoryId as string | undefined;
   const prompt = body.prompt as string | undefined;
@@ -25,7 +23,7 @@ export async function POST(request: NextRequest) {
   }
 
   try {
-    const run = await createAndQueueRun({
+    const run = await createBenchmarkRun({
       categoryId,
       prompt: prompt.trim(),
       selectedModelIds,
@@ -34,9 +32,16 @@ export async function POST(request: NextRequest) {
 
     return Response.json(run);
   } catch (error) {
+    const message = error instanceof Error ? error.message : "Failed to start benchmark";
+    const status =
+      message === "Not authenticated"
+        ? 401
+        : message === "Unauthorized"
+          ? 403
+          : 400;
     return Response.json(
-      { error: error instanceof Error ? error.message : "Failed to start benchmark" },
-      { status: 400 }
+      { error: message },
+      { status }
     );
   }
 }

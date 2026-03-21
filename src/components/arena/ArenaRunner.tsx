@@ -30,10 +30,6 @@ export default function ArenaRunner({
   onResumeRun,
   onCancelRun,
   onRestartRun,
-  onPauseModel,
-  onResumeModel,
-  onRetryModel,
-  onCancelModel,
 }: {
   status: BenchmarkStatus;
   step: string;
@@ -42,10 +38,6 @@ export default function ArenaRunner({
   onResumeRun?: () => Promise<void> | void;
   onCancelRun?: () => Promise<void> | void;
   onRestartRun?: () => Promise<void> | void;
-  onPauseModel?: (modelId: string) => Promise<void> | void;
-  onResumeModel?: (modelId: string) => Promise<void> | void;
-  onRetryModel?: (modelId: string) => Promise<void> | void;
-  onCancelModel?: (modelId: string) => Promise<void> | void;
 }) {
   const canPause = ["queued", "generating", "critiquing", "revising", "voting"].includes(status);
   const canResume = ["paused", "error", "dead_lettered", "partial"].includes(status);
@@ -134,10 +126,6 @@ export default function ArenaRunner({
       <ModelStatusGrid
         run={run}
         status={status}
-        onPauseModel={onPauseModel}
-        onResumeModel={onResumeModel}
-        onRetryModel={onRetryModel}
-        onCancelModel={onCancelModel}
       />
 
       {run && recentActions.length > 0 && (

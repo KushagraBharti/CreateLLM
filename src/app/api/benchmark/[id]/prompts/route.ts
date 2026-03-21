@@ -1,4 +1,4 @@
-import { loadBenchmarkRun } from "@/lib/storage";
+import { fetchRun } from "@/lib/convex-server";
 import { buildPromptReview } from "@/lib/prompt-review";
 
 export async function GET(
@@ -6,7 +6,7 @@ export async function GET(
   context: { params: Promise<{ id: string }> }
 ) {
   const { id } = await context.params;
-  const run = await loadBenchmarkRun(id);
+  const run = await fetchRun(id);
 
   if (!run) {
     return Response.json({ error: `Run not found: ${id}` }, { status: 404 });

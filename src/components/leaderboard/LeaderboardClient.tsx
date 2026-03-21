@@ -3,19 +3,46 @@
 import { useState } from "react";
 import Link from "next/link";
 import { motion } from "framer-motion";
-import { LeaderboardData } from "@/types";
+import { useConvexAuth, useMutation, useQuery } from "convex/react";
+import { api } from "../../../convex/_generated/api";
+import { LeaderboardData, RunExportEntry } from "@/types";
 import RankingsTable from "@/components/leaderboard/RankingsTable";
 import CategoryFilter from "@/components/leaderboard/CategoryFilter";
 import AnimatedNumber from "@/components/ui/AnimatedNumber";
+import Button from "@/components/ui/Button";
 
 export default function LeaderboardClient({ data }: { data: LeaderboardData }) {
+  const { isAuthenticated } = useConvexAuth();
   const [selectedCategory, setSelectedCategory] = useState("all");
+  const [exportMessage, setExportMessage] = useState<string | null>(null);
+  const requestLeaderboardExport = useMutation(api.exports.requestLeaderboardExport);
+  const leaderboardExports = useQuery(
+    api.exports.listLeaderboard,
+    isAuthenticated
+      ? { categoryId: selectedCategory === "all" ? undefined : selectedCategory }
+      : "skip",
+  );
   const categoryIds = Object.keys(data.byCategory).sort();
   const totalRuns = data.totals.runs;
   const topModel = data.global[0];
+  const completedExports = ((leaderboardExports ?? []) as RunExportEntry[]).filter(
+    (entry) => entry.status === "complete" && entry.downloadUrl,
+  );
 
   function getCategoryRuns(categoryId: string): number {
     return data.byCategory[categoryId]?.[0]?.totalRuns ?? 0;
+  }
+
+  function queueExport(format: "json" | "csv") {
+    setExportMessage(`Queueing ${format.toUpperCase()} leaderboard export...`);
+    void requestLeaderboardExport({
+      format,
+      categoryId: selectedCategory === "all" ? undefined : selectedCategory,
+    })
+      .then(() => setExportMessage(`${format.toUpperCase()} leaderboard export queued.`))
+      .catch((error) => {
+        setExportMessage(error instanceof Error ? error.message : "Failed to queue leaderboard export.");
+      });
   }
 
   if (data.global.length === 0) {
@@ -68,6 +95,31 @@ export default function LeaderboardClient({ data }: { data: LeaderboardData }) {
         totalRuns={totalRuns}
         getCategoryRuns={getCategoryRuns}
       />
+
+      {isAuthenticated ? (
+        <div className="rounded-xl border border-border p-4 space-y-3">
+          <div className="flex flex-wrap items-center gap-3">
+            <Button type="button" variant="ghost" onClick={() => queueExport("json")}>
+              Export {selectedCategory === "all" ? "Global" : selectedCategory} JSON
+            </Button>
+            <Button type="button" variant="ghost" onClick={() => queueExport("csv")}>
+              Export {selectedCategory === "all" ? "Global" : selectedCategory} CSV
+            </Button>
+            {completedExports.map((entry) => (
+              <a
+                key={entry.id}
+                href={entry.downloadUrl ?? "#"}
+                target="_blank"
+                rel="noreferrer"
+                className="text-sm text-text-muted hover:text-text-primary transition-colors"
+              >
+                Download {entry.format.toUpperCase()}
+              </a>
+            ))}
+          </div>
+          {exportMessage ? <p className="text-sm text-text-muted">{exportMessage}</p> : null}
+        </div>
+      ) : null}
 
       {selectedCategory === "all" ? (
         <RankingsTable

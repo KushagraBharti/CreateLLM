@@ -197,6 +197,14 @@ export interface BenchmarkWebState {
   usage: ModelStageWebUsageSummary[];
 }
 
+export interface StageWebTrace {
+  stage: WebEnabledStage;
+  modelId: string;
+  toolCalls: ToolCallRecord[];
+  retrievedSources: RetrievedSourceRecord[];
+  usage: ModelStageWebUsageSummary;
+}
+
 export interface BenchmarkReasoningState {
   details: ReasoningDetailRecord[];
 }
@@ -311,7 +319,7 @@ export interface CircuitBreakerState {
   reason?: string;
 }
 
-export type ExposureMode = "public_full";
+export type ExposureMode = "private" | "org_shared" | "public" | "public_full";
 
 export interface BenchmarkRun {
   id: string;
@@ -342,6 +350,19 @@ export interface BenchmarkRun {
     participantCount: number;
     minimumSuccessfulModels: number;
   };
+}
+
+export interface RunExportEntry {
+  id: string;
+  scopeType?: "run" | "project_summary" | "leaderboard";
+  scopeKey?: string | null;
+  categoryId?: string | null;
+  format: "json" | "csv";
+  status: string;
+  createdAt: number;
+  updatedAt: number;
+  downloadUrl?: string | null;
+  artifactLabel?: string | null;
 }
 
 export interface BenchmarkProgress {
