@@ -18,6 +18,7 @@
 .next-build
 .next-foundation
 /out/
+.next-foundation
 
 # production
 /build
