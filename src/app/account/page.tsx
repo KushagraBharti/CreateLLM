@@ -1,36 +1,72 @@
 "use client";
 
+import { FormEvent, useState, useTransition } from "react";
 import Link from "next/link";
-import { useConvexAuth, useQuery } from "convex/react";
+import { useAction, useConvexAuth, useQuery } from "convex/react";
 import { useAuthActions } from "@convex-dev/auth/react";
 import { api } from "../../../convex/_generated/api";
 import Button from "@/components/ui/Button";
 
 export default function AccountPage() {
   const { isAuthenticated, isLoading } = useConvexAuth();
-  const { signOut } = useAuthActions();
+  const { signIn, signOut } = useAuthActions();
   const viewer = useQuery(api.app.currentViewer, isAuthenticated ? {} : "skip");
-  const workspace = useQuery(api.projects.listAccessible, isAuthenticated ? {} : "skip");
+  const providerStatus = useQuery(
+    api.settings.getProviderStatus,
+    isAuthenticated ? {} : "skip",
+  );
+  const saveProviderKeys = useAction(api.settingsActions.saveProviderKeys);
+  const [openrouterApiKey, setOpenrouterApiKey] = useState("");
+  const [exaApiKey, setExaApiKey] = useState("");
+  const [message, setMessage] = useState<string | null>(null);
+  const [isPending, startTransition] = useTransition();
+
+  function handleSubmit(event: FormEvent) {
+    event.preventDefault();
+    setMessage(null);
+    startTransition(() => {
+      void saveProviderKeys({
+        openrouterApiKey: openrouterApiKey.trim() || undefined,
+        exaApiKey: exaApiKey.trim() || undefined,
+      })
+        .then(() => {
+          setOpenrouterApiKey("");
+          setExaApiKey("");
+          setMessage("Keys saved.");
+        })
+        .catch((error) => {
+          setMessage(error instanceof Error ? error.message : "Failed to save keys.");
+        });
+    });
+  }
 
   if (isLoading) {
-    return <div className="mx-auto max-w-5xl px-6 py-10 text-text-muted">Loading account...</div>;
+    return <div className="mx-auto max-w-6xl px-6 py-14 text-text-muted">Loading account...</div>;
   }
 
   if (!isAuthenticated) {
     return (
-      <div className="mx-auto max-w-4xl px-6 py-16">
-        <div className="rounded-[2rem] border border-border bg-bg-surface/70 p-8">
-          <p className="label mb-3">Account</p>
-          <h1 className="font-display text-4xl text-text-primary">Sign in required</h1>
-          <p className="mt-3 text-text-secondary">
-            Your account area is private. Sign in first to manage keys, projects, and exports.
+      <div className="mx-auto max-w-6xl px-6 py-14">
+        <div className="max-w-3xl border-t border-border pt-10">
+          <p className="label mb-5">Account</p>
+          <h1 className="font-display text-[clamp(3rem,6vw,5rem)] leading-[0.95] text-text-primary">
+            Sign in to
+            <br />
+            unlock your station.
+          </h1>
+          <p className="mt-6 max-w-2xl text-lg leading-relaxed text-text-secondary">
+            Connect GitHub to run benchmarks, store provider keys, and keep
+            your operator profile active inside the arena.
           </p>
-          <div className="mt-6">
+          <div className="mt-10 flex flex-wrap items-center gap-5">
+            <Button type="button" size="lg" onClick={() => void signIn("github", { redirectTo: "/account" })}>
+              Sign in with GitHub
+            </Button>
             <Link
-              href="/sign-in?redirect=%2Faccount"
-              className="inline-flex items-center rounded-lg bg-accent px-6 py-3 text-white transition-colors hover:bg-accent-hover"
+              href="/leaderboard"
+              className="text-base text-text-muted transition-colors hover:text-text-primary"
             >
-              Go to sign in
+              Stay public, view rankings →
             </Link>
           </div>
         </div>
@@ -38,95 +74,134 @@ export default function AccountPage() {
     );
   }
 
-  const organizations = (workspace?.organizations ?? []) as Array<{
-    id: string;
-    name: string;
-    role: string;
-    projects: Array<{ id: string; name: string; isDefault: boolean; visibility: string }>;
-  }>;
-
-  const defaultOrg = organizations.find((organization) =>
-    organization.projects.some((project) => project.isDefault),
-  );
-  const defaultProject = defaultOrg?.projects.find((project) => project.isDefault);
+  const operatorName = viewer?.user.name ?? "GitHub Operator";
+  const operatorEmail = viewer?.user.email ?? "No email available";
+  const openrouterConfigured = providerStatus?.openrouterConfigured ?? false;
+  const exaConfigured = providerStatus?.exaConfigured ?? false;
 
   return (
-    <div className="mx-auto max-w-6xl px-6 py-10">
-      <div className="grid gap-8 lg:grid-cols-[1.1fr_0.9fr]">
-        <section className="rounded-[2rem] border border-border bg-bg-surface/70 p-8">
-          <p className="label mb-4">Account</p>
-          <div className="flex items-start gap-5">
-            <div className="flex h-20 w-20 items-center justify-center rounded-full border border-border/70 bg-bg-deep text-2xl font-display text-text-primary">
-              {(viewer?.user.name ?? viewer?.user.email ?? "N").slice(0, 1).toUpperCase()}
-            </div>
-            <div className="space-y-2">
-              <h1 className="font-display text-4xl text-text-primary">
-                {viewer?.user.name ?? "GitHub Operator"}
-              </h1>
-              <p className="text-base text-text-secondary">{viewer?.user.email ?? "No email available"}</p>
-              <div className="inline-flex rounded-full border border-border/70 px-3 py-1 text-xs uppercase tracking-[0.22em] text-text-muted">
-                GitHub Connected
-              </div>
-            </div>
+    <div className="mx-auto max-w-6xl px-6 py-14">
+      <div className="border-t border-border pt-10">
+        <div className="flex flex-col gap-8 lg:flex-row lg:items-end lg:justify-between">
+          <div className="max-w-3xl">
+            <p className="label mb-5">Account</p>
+            <h1 className="font-display text-[clamp(3rem,6vw,5.25rem)] leading-[0.94] text-text-primary">
+              {operatorName}
+            </h1>
+            <p className="mt-4 text-lg leading-relaxed text-text-secondary">
+              GitHub operator profile attached to the live NovelBench arena.
+            </p>
+            <p className="mt-2 text-sm uppercase tracking-[0.24em] text-text-muted">
+              {operatorEmail}
+            </p>
           </div>
 
-          <div className="mt-8 grid gap-4 md:grid-cols-2">
-            <div className="rounded-2xl border border-border/70 bg-bg-deep/70 p-5">
-              <p className="label mb-2">OpenRouter</p>
-              <p className="text-lg text-text-primary">
-                {viewer?.providerStatus.openrouterConfigured ? "Configured" : "Missing"}
-              </p>
-            </div>
-            <div className="rounded-2xl border border-border/70 bg-bg-deep/70 p-5">
-              <p className="label mb-2">Exa</p>
-              <p className="text-lg text-text-primary">
-                {viewer?.providerStatus.exaConfigured ? "Configured" : "Missing"}
-              </p>
-            </div>
-          </div>
-
-          <div className="mt-8 flex flex-wrap gap-3">
+          <div className="flex flex-wrap items-center gap-4">
             <Link
-              href="/settings"
-              className="inline-flex items-center rounded-lg border border-border px-5 py-3 text-text-primary transition-colors hover:border-border-hover"
+              href="/arena"
+              className="text-base text-text-muted transition-colors hover:text-text-primary"
             >
-              Open advanced settings
+              Enter arena →
             </Link>
             <Button type="button" variant="ghost" onClick={() => void signOut()}>
               Sign out
             </Button>
           </div>
-        </section>
+        </div>
+      </div>
 
-        <aside className="space-y-6">
-          <div className="rounded-[2rem] border border-border bg-bg-deep/85 p-8">
-            <p className="label mb-4">Active Workspace</p>
-            <div className="space-y-4">
-              <div className="rounded-2xl border border-border/70 bg-bg-surface/50 p-5">
-                <p className="label mb-1">Organization</p>
-                <p className="text-xl text-text-primary">{defaultOrg?.name ?? "Provisioning..."}</p>
-                <p className="mt-1 text-sm text-text-muted">{defaultOrg?.role ?? "owner"}</p>
+      <div className="mt-12 grid gap-px border border-border bg-border lg:grid-cols-[0.92fr_1.08fr]">
+        <section className="bg-bg-deep px-6 py-8 sm:px-8">
+          <div className="mb-8 flex items-center justify-between">
+            <p className="label">Provider Status</p>
+            <span className="font-mono text-xs uppercase tracking-[0.24em] text-text-muted">
+              Public Arena
+            </span>
+          </div>
+
+          <div className="space-y-6">
+            <div className="border-b border-border pb-5">
+              <div className="mb-2 flex items-center justify-between">
+                <span className="font-display text-2xl text-text-primary">OpenRouter</span>
+                <span
+                  className={openrouterConfigured ? "text-accent" : "text-text-muted"}
+                >
+                  {openrouterConfigured ? "Ready" : "Missing"}
+                </span>
               </div>
-              <div className="rounded-2xl border border-border/70 bg-bg-surface/50 p-5">
-                <p className="label mb-1">Default Project</p>
-                <p className="text-xl text-text-primary">{defaultProject?.name ?? "Provisioning..."}</p>
-                <p className="mt-1 text-sm text-text-muted">
-                  visibility {defaultProject?.visibility ?? "private"}
-                </p>
+              <p className="text-base leading-relaxed text-text-secondary">
+                Used for all model generation, critique, revision, and voting.
+              </p>
+            </div>
+
+            <div className="border-b border-border pb-5">
+              <div className="mb-2 flex items-center justify-between">
+                <span className="font-display text-2xl text-text-primary">Exa</span>
+                <span className={exaConfigured ? "text-accent" : "text-text-muted"}>
+                  {exaConfigured ? "Ready" : "Missing"}
+                </span>
               </div>
+              <p className="text-base leading-relaxed text-text-secondary">
+                Powers optional web research during generation and revision.
+              </p>
+            </div>
+
+            <div className="pt-1 text-sm leading-relaxed text-text-muted">
+              Everything ships publicly by default right now. There are no
+              private project controls on the surface anymore.
             </div>
           </div>
+        </section>
 
-          <div className="rounded-[2rem] border border-border bg-bg-surface/70 p-8">
-            <p className="label mb-4">What's Unlocked</p>
-            <ul className="space-y-3 text-text-secondary">
-              <li>Private arena launches and live run controls</li>
-              <li>Archive access and export downloads</li>
-              <li>Workspace policy, budgets, and diagnostics</li>
-              <li>Encrypted BYOK storage for OpenRouter and Exa</li>
-            </ul>
+        <section className="bg-bg-surface px-6 py-8 sm:px-8">
+          <div className="mb-8">
+            <p className="label mb-4">Bring Your Own Keys</p>
+            <p className="max-w-2xl text-base leading-relaxed text-text-secondary">
+              Keys are encrypted before storage and only decrypted inside
+              server-side Convex actions during execution.
+            </p>
           </div>
-        </aside>
+
+          <form onSubmit={handleSubmit} className="space-y-8">
+            <div className="grid gap-px border border-border bg-border">
+              <label className="bg-bg-deep px-5 py-5">
+                <span className="label mb-2 block">OpenRouter API Key</span>
+                <input
+                  type="password"
+                  value={openrouterApiKey}
+                  onChange={(event) => setOpenrouterApiKey(event.target.value)}
+                  className="w-full border-0 bg-transparent px-0 py-0 text-lg text-text-primary outline-none placeholder:text-text-muted/45"
+                  placeholder="sk-or-v1-..."
+                />
+              </label>
+              <label className="bg-bg-deep px-5 py-5">
+                <span className="label mb-2 block">Exa API Key</span>
+                <input
+                  type="password"
+                  value={exaApiKey}
+                  onChange={(event) => setExaApiKey(event.target.value)}
+                  className="w-full border-0 bg-transparent px-0 py-0 text-lg text-text-primary outline-none placeholder:text-text-muted/45"
+                  placeholder="exa_..."
+                />
+              </label>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-4">
+              <Button type="submit" disabled={isPending}>
+                {isPending ? "Saving..." : "Save Keys"}
+              </Button>
+              <span className="text-sm text-text-muted">
+                Leave a field blank to keep the stored value unchanged.
+              </span>
+            </div>
+
+            {message ? (
+              <p className="text-sm uppercase tracking-[0.18em] text-text-muted">
+                {message}
+              </p>
+            ) : null}
+          </form>
+        </section>
       </div>
     </div>
   );

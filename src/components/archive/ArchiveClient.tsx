@@ -3,6 +3,7 @@
 import { useMemo, useState } from "react";
 import Link from "next/link";
 import { motion } from "framer-motion";
+import { clsx } from "clsx";
 import { BenchmarkRunSummary } from "@/types";
 import { getCategoryIdentity } from "@/utils/category-identity";
 import { StatusBadge } from "@/components/ui/Badge";
@@ -61,19 +62,23 @@ export default function ArchiveClient({ runs, nextCursor, hasMore, filters }: Ar
 
   return (
     <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="space-y-6">
-      <form action="/archive" method="get" className="rounded-2xl border border-border bg-bg-deep/40 p-4">
-        <div className="grid grid-cols-1 gap-4 md:grid-cols-5">
+      <form
+        action="/archive"
+        method="get"
+        className="border-y border-border/80 py-5"
+      >
+        <div className="grid grid-cols-1 gap-4 lg:grid-cols-[1.6fr_0.9fr_0.9fr_0.9fr]">
           <input
             type="search"
             name="q"
             defaultValue={filters.query}
             placeholder="Search prompts"
-            className="rounded-lg border border-border bg-bg-deep px-4 py-3 text-sm text-text-primary outline-none focus:border-accent md:col-span-2"
+            className="w-full border-0 border-b border-border/70 bg-transparent px-0 py-3 text-base text-text-primary outline-none transition-colors placeholder:text-text-muted/45 focus:border-accent"
           />
           <select
             name="category"
             defaultValue={filters.categoryId}
-            className="rounded-lg border border-border bg-bg-deep px-4 py-3 text-sm text-text-primary outline-none focus:border-accent"
+            className="w-full border-0 border-b border-border/70 bg-transparent px-0 py-3 text-base text-text-primary outline-none transition-colors focus:border-accent"
           >
             <option value="all">All categories</option>
             {categories.map((categoryId) => (
@@ -85,7 +90,7 @@ export default function ArchiveClient({ runs, nextCursor, hasMore, filters }: Ar
           <select
             name="status"
             defaultValue={filters.status}
-            className="rounded-lg border border-border bg-bg-deep px-4 py-3 text-sm text-text-primary outline-none focus:border-accent"
+            className="w-full border-0 border-b border-border/70 bg-transparent px-0 py-3 text-base text-text-primary outline-none transition-colors focus:border-accent"
           >
             <option value="all">All statuses</option>
             <option value="complete">Complete</option>
@@ -94,25 +99,25 @@ export default function ArchiveClient({ runs, nextCursor, hasMore, filters }: Ar
             <option value="canceled">Canceled</option>
             <option value="error">Error</option>
           </select>
-          <div className="flex gap-3">
+          <div className="grid grid-cols-2 gap-3">
             <input
               type="date"
               name="from"
               defaultValue={filters.from}
-              className="w-full rounded-lg border border-border bg-bg-deep px-4 py-3 text-sm text-text-primary outline-none focus:border-accent"
+              className="w-full border-0 border-b border-border/70 bg-transparent px-0 py-3 text-base text-text-primary outline-none transition-colors focus:border-accent"
             />
             <input
               type="date"
               name="to"
               defaultValue={filters.to}
-              className="w-full rounded-lg border border-border bg-bg-deep px-4 py-3 text-sm text-text-primary outline-none focus:border-accent"
+              className="w-full border-0 border-b border-border/70 bg-transparent px-0 py-3 text-base text-text-primary outline-none transition-colors focus:border-accent"
             />
           </div>
         </div>
-        <div className="mt-4 flex items-center gap-3">
+        <div className="mt-4 flex flex-wrap items-center gap-4">
           <button
             type="submit"
-            className="rounded-lg border border-border px-4 py-2 text-sm text-text-primary transition-colors hover:border-accent hover:text-accent"
+            className="inline-flex items-center rounded-full border border-border/70 px-5 py-2 text-sm text-text-primary transition-colors hover:border-accent hover:text-accent"
           >
             Apply filters
           </button>
@@ -123,12 +128,18 @@ export default function ArchiveClient({ runs, nextCursor, hasMore, filters }: Ar
       </form>
 
       {categories.length > 1 && (
-        <div className="flex gap-4 flex-wrap border-b border-border pb-3">
+        <div className="flex flex-wrap items-center gap-2 border-b border-border/70 pb-4">
           <button
             onClick={() => setFilterCategory("all")}
-            className={filterCategory === "all" ? "text-text-primary" : "text-text-muted hover:text-text-secondary"}
+            className={clsx(
+              "inline-flex items-center gap-2 rounded-full border px-4 py-2 text-sm transition-colors",
+              filterCategory === "all"
+                ? "border-accent/50 bg-accent/10 text-text-primary"
+                : "border-border/70 text-text-muted hover:border-border hover:text-text-primary",
+            )}
           >
-            All ({runs.length})
+            <span className="w-1.5 h-1.5 rounded-full bg-accent" />
+            All runs ({runs.length})
           </button>
           {categories.map((catId) => {
             const identity = getCategoryIdentity(catId);
@@ -137,20 +148,27 @@ export default function ArchiveClient({ runs, nextCursor, hasMore, filters }: Ar
               <button
                 key={catId}
                 onClick={() => setFilterCategory(catId)}
-                className="flex items-center gap-1.5 text-base transition-colors capitalize"
-                style={{
-                  color: filterCategory === catId ? identity.color : "var(--color-text-muted)",
-                }}
+                className={clsx(
+                  "inline-flex items-center gap-2 rounded-full border px-4 py-2 text-sm capitalize transition-colors",
+                  filterCategory === catId
+                    ? "border-transparent bg-bg-surface text-text-primary"
+                    : "border-border/70 text-text-muted hover:border-border hover:text-text-primary",
+                )}
+                style={
+                  filterCategory === catId
+                    ? { boxShadow: `inset 0 0 0 1px ${identity.color}55` }
+                    : undefined
+                }
               >
                 <span className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: identity.color }} />
-                {catId} ({count})
+                {catId} <span className="text-text-muted">({count})</span>
               </button>
             );
           })}
         </div>
       )}
 
-      <div className="border-t border-border">
+      <div className="border-t border-border/70">
         {filteredRuns.map((run, index) => {
           const identity = getCategoryIdentity(run.categoryId);
           return (
@@ -161,26 +179,33 @@ export default function ArchiveClient({ runs, nextCursor, hasMore, filters }: Ar
               transition={{ delay: index * 0.03 }}
             >
               <Link href={`/arena/${run.id}`}>
-                <div className="flex items-center gap-4 py-4 border-b border-border/50 hover:bg-bg-surface/30 transition-colors group cursor-pointer px-1">
-                  <div className="flex items-center gap-2 w-28 flex-shrink-0">
-                    <span className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: identity.color }} />
-                    <span className="text-base text-text-muted capitalize font-mono">{run.categoryId}</span>
+                <div className="group flex items-center gap-4 border-b border-border/50 px-1 py-5 transition-colors hover:bg-white/[0.02]">
+                  <div className="flex w-36 flex-shrink-0 items-center gap-3">
+                    <span className="h-2 w-2 rounded-full" style={{ backgroundColor: identity.color }} />
+                    <span className="font-mono text-sm uppercase tracking-[0.18em] text-text-muted">
+                      {run.categoryId}
+                    </span>
                   </div>
 
-                  <div className="flex-1 min-w-0">
-                    <p className="text-base text-text-primary line-clamp-1 group-hover:text-accent transition-colors">
+                  <div className="min-w-0 flex-1">
+                    <p className="line-clamp-1 text-base text-text-primary transition-colors group-hover:text-accent">
                       {run.prompt}
                     </p>
-                    <p className="text-sm text-text-muted mt-1">
-                      {run.completedModelCount}/{run.modelCount} models completed
-                    </p>
+                    <div className="mt-2 flex flex-wrap items-center gap-3 text-sm text-text-muted">
+                      <span>
+                        {run.completedModelCount}/{run.modelCount} models completed
+                      </span>
+                      <span className="hidden h-1 w-1 rounded-full bg-border sm:block" />
+                      <span>{new Date(run.timestamp).toLocaleDateString()}</span>
+                    </div>
                   </div>
 
-                  <StatusBadge status={run.status} />
-
-                  <span className="text-base font-mono text-text-muted w-28 text-right flex-shrink-0">
-                    {new Date(run.timestamp).toLocaleDateString()}
-                  </span>
+                  <div className="flex flex-shrink-0 items-center gap-4">
+                    <StatusBadge status={run.status} />
+                    <span className="hidden w-28 shrink-0 text-right font-mono text-sm text-text-muted lg:block">
+                      {new Date(run.timestamp).toLocaleDateString()}
+                    </span>
+                  </div>
                 </div>
               </Link>
             </motion.div>

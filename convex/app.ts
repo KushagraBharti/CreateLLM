@@ -37,7 +37,7 @@ export const bootstrapViewer = mutation({
       organizationId: orgId,
       name: "My Arena",
       slug: "my-arena",
-      visibility: "private",
+      visibility: "public_full",
       createdByUserId: user._id,
     });
     await ctx.db.insert("organizationMembers", {

@@ -678,7 +678,7 @@ export const create = mutation({
       status: "queued",
       currentStep: "Queued for execution",
       checkpointStage: "generate",
-      visibility: args.visibility ?? "private",
+      visibility: args.visibility ?? "public_full",
       workflowId: undefined,
       participantCount: selectedModels.length,
       minimumSuccessfulModels: minimumSuccessfulModels(selectedModels.length),
@@ -786,7 +786,7 @@ export const create = mutation({
       projectId,
       categoryId: args.categoryId,
       status: "queued",
-      visibility: args.visibility ?? "private",
+      visibility: args.visibility ?? "public_full",
       promptSearchText: buildRunSearchText(args.prompt),
       promptExcerpt: buildPromptExcerpt(args.prompt),
       createdAt: now,
@@ -832,7 +832,7 @@ export const create = mutation({
       resourceId: String(runId),
       metadata: {
         participantCount: selectedModels.length,
-        visibility: args.visibility ?? "private",
+        visibility: args.visibility ?? "public_full",
       },
       createdAt: now,
     });
