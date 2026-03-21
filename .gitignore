@@ -48,3 +48,32 @@ next-env.d.ts
 # agents
 .agents
 .claude
+
+# local skill installs and generated agent-specific folders
+.agent/
+.codebuddy/
+.commandcode/
+.continue/
+.crush/
+.factory/
+.goose/
+.kilocode/
+.kiro/
+.mcpjam/
+.mux/
+.neovate/
+.openhands/
+.pi/
+.qoder/
+.qwen/
+.roo/
+.trae/
+.windsurf/
+.zencoder/
+skills/
+
+# convex ai setup state
+convex/_generated/ai/*.state.json
+convex/_generated/api.*
+convex/_generated/dataModel.*
+convex/_generated/server.*
