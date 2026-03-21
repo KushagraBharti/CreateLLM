@@ -1,40 +1,42 @@
 # NovelBench
 
-NovelBench is an LLM creativity benchmark built as a live arena. Multiple models are put through the same prompt, asked to generate ideas, critique each other anonymously, revise their work, and then vote on the result. The goal is not just to see who can answer a prompt. The goal is to find which model can do creative work well under competition, feedback, and revision pressure.
+NovelBench is a live LLM creativity benchmark built as a public arena. Multiple models are put through the same prompt, asked to generate ideas, critique one another anonymously, revise their work, optionally accept human critique, and then vote on the final result.
 
-The app is intentionally opinionated:
+The point is not to measure one-shot completion quality. The point is to measure creative performance under competition, feedback, revision, and judgment pressure.
 
-- It treats creativity as a process, not a single completion.
-- It separates domain knowledge from the scoring pipeline.
-- It keeps every run inspectable after the fact.
-- It stores operational data in Convex and large artifacts in Convex file storage.
-- It is designed to be durable, replayable, and easy to extend.
+## Product Shape
 
-## What NovelBench Does
+NovelBench is intentionally opinionated:
 
-- Collects a user prompt in one of eight creative domains.
-- Runs a configurable roster of OpenRouter-backed models.
-- Optionally lets eligible stages use Exa-backed web search when project policy allows it.
-- Has each model generate a structured idea.
-- Has models critique one another anonymously.
-- Lets models revise their own ideas using the critiques they received.
-- Runs a final anonymous vote over the revised ideas.
-- Stores append-only run state, events, and artifacts for replay, archive browsing, and leaderboard aggregation.
+- creativity is treated as a process, not one answer
+- runs, prompts, and projects are public by default
+- collaboration matters more than private ownership
+- reasoning traces, tool calls, exact URLs, and live draft streaming are product features, not debug extras
+- runs are durable, replayable, searchable, and auditable
 
-## Why It Exists
+## Benchmark Flow
 
-Most benchmark setups ask a model for one answer and score the first response. NovelBench instead measures a more realistic creative workflow:
+Each run moves through four stages:
 
-- Can the model produce something novel?
-- Can it judge other work fairly when identity is hidden?
-- Can it incorporate critique without collapsing into generic revision?
-- Can it still win after the work has been improved and re-ranked?
+1. Generate
+   - models receive the domain prompt plus the user prompt
+   - eligible models can use Exa-backed search when research is enabled
+   - outputs are structured and repaired aggressively when JSON is close but malformed
+2. Critique
+   - models critique and rank ideas anonymously
+   - model identity is hidden behind stable labels
+3. Human critique
+   - this is the only intentional manual checkpoint
+   - users can add optional critique before revision
+4. Revise and crown
+   - models revise their ideas using critique
+   - final anonymous voting determines standings
 
-That makes it useful for evaluating frontier models, fast models, and custom OpenRouter models in a single shared arena.
+Runs should auto-progress through every stage except the human critique checkpoint.
 
 ## Creative Domains
 
-Each run happens in one domain. The current taxonomy is:
+The current domain taxonomy is:
 
 - Venture
 - Frontier
@@ -45,139 +47,173 @@ Each run happens in one domain. The current taxonomy is:
 - Stage
 - Blueprint
 
-Each domain has:
+Each domain defines:
 
-- a category-specific system prompt
+- prompt framing
 - evaluation criteria
-- a structured output schema
-- example prompts for quick starts
+- output schema
+- quick-start prompt examples
 
-## How The Benchmark Works
+## Current Architecture
 
-1. **Generate**
-   - The selected models receive the same user prompt plus the domain prompt.
-   - Each model returns structured JSON for its idea.
-   - If research is enabled for the project and the user has provided an Exa key, supported models can issue bounded web-search tool calls during idea generation.
+NovelBench is fully Convex-first.
 
-2. **Critique and rank**
-   - Every model critiques the other ideas anonymously.
-   - It also ranks all ideas, including its own.
-   - The app normalizes malformed JSON aggressively so a run can continue when a model outputs something close to the requested format.
+- Convex database stores runs, participants, stage state, policies, budgets, jobs, audit logs, and cached read models
+- Convex file storage stores large artifacts and exports
+- Convex Workflow and Workpool handle durable stage execution
+- Convex Auth handles sign-in
+- Next.js is the UI shell and route layer
+- OpenRouter is the model gateway
+- Exa is the optional research gateway
 
-3. **Optional human critique**
-   - If the run reaches the human critique checkpoint, the user can add their own notes.
-   - Those human critiques are folded into the revision prompt for the affected ideas.
+Main path:
 
-4. **Revise**
-   - Each surviving model revises its own idea using the critiques it received.
-   - If research is enabled, supported models can also use Exa during revision.
-   - Revised ideas are stored separately from the originals.
+`UI -> /api/benchmark -> Convex mutation -> Convex workflow/workpool -> OpenRouter and Exa -> Convex tables/file storage -> realtime queries -> archive/results/leaderboard`
 
-5. **Final vote**
-   - The revised ideas are ranked again, anonymously.
-   - Final standings are computed from the aggregated judge rankings.
-   - The winner reveal uses the final average rank.
+## Data Model
 
-## Core Mechanics
+The run model is append-only and normalized:
 
-- **OpenRouter is the model gateway.** Model generation, critique, revision, and voting run through user-provided OpenRouter credentials.
-- **Exa is the research gateway.** Web search is optional, policy-controlled, and uses user-provided Exa credentials.
-- **Runs are Convex-backed.** Run summaries, participants, stage state, policies, budgets, usage, and analytics live in Convex tables.
-- **Large payloads live in object storage.** Search payloads, exports, and other large artifacts are stored in Convex file storage.
-- **Execution is durable.** Convex Workflow and bounded work pools coordinate benchmark stages instead of relying on an in-process scheduler.
-- **Progress is realtime.** The UI subscribes to Convex queries for live run state instead of consuming an SSE route.
-- **Trace visibility is part of the product.** New runs should preserve reasoning details, tool calls, exact cited URLs, and live draft streaming where supported.
-- **Prompt generation is centralized.** Shared stage copy lives in `src/lib/prompt-copy.ts`, while the prompt builder logic lives in `src/lib/prompts.ts`.
-- **Structured output is defensive.** The app tries to recover from fenced JSON, truncated JSON, and lightly malformed model output.
-- **Anonymous labels are stable per stage.** Judges see labels like A, B, C, not model names.
-- **The leaderboard is cached derived data.** It is updated from completed runs and served from Convex read models.
-- **BYOK is enforced.** Users bring their own OpenRouter and Exa keys, which are stored encrypted server-side.
+- `runs` stores the compact run summary
+- `runParticipants` stores per-model state, usage, status, and stage outputs
+- `runEvents` stores append-only stage and activity events
+- `runArtifacts` stores large saved payloads and file storage references
+- `jobs` and `jobAttempts` store async work history
+- `leaderboardSnapshots`, `categoryStatsDaily`, and related tables power read-heavy pages
 
-## Implementation Guardrails
+The app does not rewrite one giant run blob anymore.
 
-- **One timeout source of truth.** Runtime/provider timeout configuration should come from `src/lib/runtime-config.ts`, not scattered per caller.
-- **Workflow state must stay small.** Convex workflow steps should pass IDs and compact summaries, not full event streams or live trace payloads.
-- **Automatic stage progression is expected.** Runs should advance automatically through generate, critique, revise, and final vote. Only the human critique checkpoint is intentionally user-gated.
-- **Archive is a public read surface.** Archive pages and archive detail should remain stable, public-facing views, separate from the live arena control shell.
-- **The UI language is editorial, not SaaS.** Favor typography, spacing, rules, and hard-edged modules over rounded cards, pills, floating badges, and detached utility panels.
+## Public Collaboration
 
-## Tech Stack
+The product direction is public collaboration.
 
-- Next.js App Router
-- React 19
-- TypeScript
-- Tailwind CSS v4
-- Framer Motion
-- Convex database, auth, file storage, and workflows
-- OpenRouter API
-- Exa API
-- Bun for package management and scripts
+- projects are public
+- runs are public
+- prompts are public
+- collaboration is role-based
+- private projects are intentionally out of scope for now
+
+Current role model:
+
+- org roles: `owner`, `admin`, `member`
+- project roles: `editor`, `viewer`
+
+The account surface supports:
+
+- BYOK provider keys
+- accessible projects/workspaces
+- default project selection
+- adding collaborators by email
+- changing project member roles
+
+## Provider Model
+
+NovelBench is BYOK.
+
+- OpenRouter keys are required to run benchmarks
+- Exa keys are optional and only used when policy allows research
+- provider keys are encrypted and stored server-side
+- provider usage is policy-controlled per org/project
+
+Supported governance includes:
+
+- allowed models
+- max models per run
+- max concurrent runs
+- research enablement
+- budget reservation and settlement
+- rate-limit buckets
+- audit logs and usage tracking
+
+## Query and Read Model Design
+
+Archive, results, and leaderboard use Convex-backed read paths.
+
+- archive browsing uses normalized browse/search query contracts
+- prompt search and filters are server-driven
+- archive detail is a stable public read surface
+- leaderboard and analytics are cached read models, not full rescans on every request
+
+## UI Rules
+
+NovelBench uses an editorial dark interface, not generic SaaS UI.
+
+- prefer typography, spacing, rules, and grid rhythm
+- prefer hard edges over rounded cards and pills
+- keep controls integrated into the page structure
+- avoid detached utility boxes unless a surface already uses one intentionally
+
+When changing UI, match the visual language already established by the landing page, dashboard, arena, archive, and leaderboard.
+
+## Non-Negotiable Implementation Rules
+
+- `src/lib/runtime-config.ts` is the single source of truth for timeouts and runtime limits
+- live reasoning/tool-call/draft-token visibility must remain intact for new runs
+- archive detail must stay separate from the live arena shell
+- workflow step payloads must stay compact
+- hot `runs` documents should not be patched for high-frequency live activity when append-only events can be used instead
+- if production Convex is patched directly, the repo change must be committed immediately after
 
 ## Repository Layout
 
-- `src/app` - routes, pages, route handlers, and loading states
-- `src/components` - page sections, widgets, result views, and UI primitives
-- `src/lib` - prompts, shared web-search helpers, OpenRouter client, and results aggregation
-- `src/hooks` - client hooks for Convex-backed live state and easter eggs
-- `src/types` - shared type definitions
-- `src/utils` - identity helpers and animation variants
-- `convex` - backend schema, auth, queries, mutations, actions, workflows, and policy helpers
-- `docs` - prompt review and prompt-writing references
+- `src/app` - routes, pages, API handlers, loading states
+- `src/components` - arena, archive, results, leaderboard, auth, UI primitives
+- `src/lib` - prompts, providers, parsing, results helpers, runtime config
+- `src/hooks` - live Convex-backed run state
+- `src/types` - shared run and domain types
+- `src/utils` - identity and animation helpers
+- `convex` - schema, auth, queries, mutations, actions, workflows, backend helpers
+- `docs` - prompt and operational references
 
-## Development Setup
+## Local Development
 
-Use Bun only.
+Use Bun.
 
-1. Install dependencies:
+Install:
 
 ```bash
 bun install
 ```
 
-2. Create your environment file from the example and add the Convex and auth settings needed for local development:
+Core local app env:
 
-```text
+```env
 NEXT_PUBLIC_CONVEX_URL=https://glorious-moose-513.convex.cloud
 AUTH_SECRET=your_auth_secret
+AUTH_GITHUB_ID=your_github_client_id
+AUTH_GITHUB_SECRET=your_github_client_secret
 ```
 
-3. Start the dev server:
+Run locally:
 
 ```bash
 bun run dev
 ```
 
-## Useful Scripts
+## Useful Commands
 
-- `bun run dev` - start the app locally
-- `bun run build` - production build
-- `bun run start` - run the production server
-- `bun run lint` - run lint checks
-- `bun run test` - run the Vitest suite
-- `bunx convex codegen` - regenerate Convex types
-- `bunx convex deploy -y` - deploy to the production Convex backend
+- `bun run dev`
+- `bun run build`
+- `bun run lint`
+- `bun run test`
+- `bun run typecheck`
+- `bun run verify`
+- `bunx convex deploy -y`
 
-## Environment
+## Convex Production Env
 
-The app requires local Convex/auth configuration to boot the web app. Provider credentials are BYOK and are stored through the in-app settings flow instead of being shared as global server keys.
-
-Typical app variables include:
-
-- `NEXT_PUBLIC_CONVEX_URL`
-- `AUTH_SECRET`
-- GitHub OAuth credentials
-
-Convex production variables are managed separately in Convex:
+Managed in Convex, not in local app env:
 
 - `AUTH_GITHUB_ID`
 - `AUTH_GITHUB_SECRET`
 - `PROVIDER_VAULT_MASTER_KEY`
 - `LEGACY_MIGRATION_SECRET`
+- `SITE_URL`
+- JWT auth keys required by Convex Auth
 
 ## Notes
 
-- The archive and leaderboard are driven by Convex read models, not by scanning local files.
-- Legacy benchmark files can be imported into the Convex run/event/artifact model through a migration path.
-- The current model catalog in code is the source of truth; the README may lag if the catalog changes.
-- Prompt behavior is centralized and reviewed separately so it can be changed without rewriting the workflow.
-- If a production Convex fix is deployed directly, the corresponding repo change should be committed immediately so the repo and deployment stay in sync.
+- legacy JSON runs have been migrated into the Convex run/event/artifact model
+- the current model catalog in code is the source of truth
+- prompt behavior is centralized in `src/lib/prompt-copy.ts` and `src/lib/prompts.ts`
+- public archive and leaderboard are first-class product surfaces, not debug views
