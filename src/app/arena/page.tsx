@@ -14,6 +14,7 @@ import ResultsView from "@/components/results/ResultsView";
 import Button from "@/components/ui/Button";
 import ModelSelector from "@/components/arena/ModelSelector";
 import HumanCritiquePanel from "@/components/arena/HumanCritiquePanel";
+import RouteLoading from "@/components/ui/RouteLoading";
 
 export default function ArenaPage() {
   return (
@@ -26,6 +27,7 @@ export default function ArenaPage() {
 function ArenaContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
+  const [redirectTarget, setRedirectTarget] = useState<string | null>(null);
   const initialCategory = searchParams.get("category") || categories[0].id;
   const [categoryId, setCategoryId] = useState(initialCategory);
   const [prompt, setPrompt] = useState("");
@@ -68,10 +70,33 @@ function ArenaContent() {
   }, [status, result]);
 
   useEffect(() => {
-    if (runId) {
-      router.replace(`/arena/${runId}`);
+    if (typeof window === "undefined") return;
+    const pendingRunId = window.sessionStorage.getItem("novelbench:pending-arena-run");
+    if (pendingRunId) {
+      setRedirectTarget(`/arena/${pendingRunId}`);
     }
-  }, [router, runId]);
+  }, []);
+
+  useEffect(() => {
+    if (!runId) return;
+    if (typeof window !== "undefined") {
+      window.sessionStorage.setItem("novelbench:pending-arena-run", runId);
+    }
+    setRedirectTarget(`/arena/${runId}`);
+  }, [runId]);
+
+  useEffect(() => {
+    if (!redirectTarget) return;
+    router.replace(redirectTarget);
+
+    const timeoutId = window.setTimeout(() => {
+      if (window.location.pathname !== redirectTarget) {
+        window.location.replace(redirectTarget);
+      }
+    }, 250);
+
+    return () => window.clearTimeout(timeoutId);
+  }, [redirectTarget, router]);
 
   const totalSelectedModels = selectedModelIds.length + customModelIds.length;
   const canStart = prompt.trim().length > 0 && totalSelectedModels >= 2 && totalSelectedModels <= 8 && !isRunning;
@@ -87,10 +112,13 @@ function ArenaContent() {
         customModelIds,
       });
       if (runId) {
-        router.push(`/arena/${runId}`);
+        if (typeof window !== "undefined") {
+          window.sessionStorage.setItem("novelbench:pending-arena-run", runId);
+        }
+        setRedirectTarget(`/arena/${runId}`);
       }
     },
-    [canStart, categoryId, customModelIds, prompt, router, selectedModelIds, startBenchmark]
+    [canStart, categoryId, customModelIds, prompt, selectedModelIds, startBenchmark]
   );
 
   const handleQuickRun = useCallback(
@@ -104,17 +132,30 @@ function ArenaContent() {
         customModelIds,
       });
       if (runId) {
-        router.push(`/arena/${runId}`);
+        if (typeof window !== "undefined") {
+          window.sessionStorage.setItem("novelbench:pending-arena-run", runId);
+        }
+        setRedirectTarget(`/arena/${runId}`);
       }
     },
-    [categoryId, customModelIds, isRunning, router, selectedModelIds, startBenchmark]
+    [categoryId, customModelIds, isRunning, selectedModelIds, startBenchmark]
   );
 
   const selectionState = useMemo(
     () => ({ selectedModelIds, customModelIds }),
     [customModelIds, selectedModelIds]
   );
+  const isRedirectingToRun = Boolean(redirectTarget);
   const showRunWorkspace = Boolean(status && status !== "complete" && status !== "canceled");
+
+  if (isRedirectingToRun) {
+    return (
+      <RouteLoading
+        title="Opening run"
+        subtitle="Moving this benchmark into its dedicated live workspace."
+      />
+    );
+  }
 
   return (
     <div className="max-w-7xl mx-auto px-6 py-8">

@@ -1,0 +1,93 @@
+"use client";
+
+import { useEffect } from "react";
+import Link from "next/link";
+import { useRouter } from "next/navigation";
+import { motion } from "framer-motion";
+import { BenchmarkRun } from "@/types";
+import ResultsView from "@/components/results/ResultsView";
+import { StatusBadge } from "@/components/ui/Badge";
+import { useBenchmarkSSE } from "@/hooks/useBenchmarkSSE";
+import ArenaRunner from "@/components/arena/ArenaRunner";
+import HumanCritiquePanel from "@/components/arena/HumanCritiquePanel";
+
+export default function BenchmarkDetailClient({
+  runId,
+  initialRun,
+}: {
+  runId: string;
+  initialRun: BenchmarkRun;
+}) {
+  const router = useRouter();
+  const live = useBenchmarkSSE();
+
+  useEffect(() => {
+    if (typeof window !== "undefined") {
+      const pendingRunId = window.sessionStorage.getItem("novelbench:pending-arena-run");
+      if (pendingRunId === runId) {
+        window.sessionStorage.removeItem("novelbench:pending-arena-run");
+      }
+    }
+  }, [runId]);
+
+  useEffect(() => {
+    live.attachToRun(initialRun);
+  }, [initialRun]);
+
+  const activeRun = live.result ?? initialRun;
+
+  return (
+    <div className="max-w-5xl mx-auto px-6 py-8">
+      <Link
+        href="/archive"
+        className="text-base text-text-muted hover:text-text-secondary transition-colors mb-6 inline-block"
+      >
+        &larr; Archive
+      </Link>
+
+      <motion.div initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }}>
+        <div className="mb-6">
+          <StatusBadge status={activeRun.status} />
+        </div>
+        <div className="mb-8 space-y-6">
+          <ArenaRunner
+            status={activeRun.status}
+            step={activeRun.currentStep}
+            run={activeRun}
+            onPauseRun={() => live.pauseBenchmark()}
+            onResumeRun={() => live.resumeBenchmark()}
+            onCancelRun={() => live.cancelBenchmark()}
+            onRestartRun={async () => {
+              const next = await live.restartBenchmark();
+              if (next?.id && next.id !== runId) {
+                router.push(`/arena/${next.id}`);
+              }
+            }}
+            onPauseModel={(modelId) => live.pauseModel(modelId)}
+            onResumeModel={(modelId) => live.resumeModel(modelId)}
+            onRetryModel={(modelId) => live.retryModel(modelId)}
+            onCancelModel={(modelId) => live.cancelModel(modelId)}
+          />
+          {activeRun.status === "awaiting_human_critique" && (
+            <HumanCritiquePanel
+              run={activeRun}
+              onSubmit={async (critiques) => {
+                await live.submitHumanCritiques(critiques);
+              }}
+              onProceed={async () => {
+                await live.proceedBenchmark();
+              }}
+            />
+          )}
+        </div>
+        <ResultsView
+          run={activeRun}
+          isLive={live.isRunning}
+          streamingText={live.streamingText}
+          toolActivity={live.toolActivity}
+          reasoningActivity={live.reasoningActivity}
+        />
+      </motion.div>
+    </div>
+  );
+}
