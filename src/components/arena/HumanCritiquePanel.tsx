@@ -54,7 +54,7 @@ export default function HumanCritiquePanel({
   }
 
   return (
-    <div className="border border-border rounded-2xl p-6 bg-bg-surface/70">
+    <div className="border-t border-border pt-6">
       <div className="flex flex-col md:flex-row md:items-end md:justify-between gap-4 mb-6">
         <div>
           <p className="label mb-2">Optional Human Critique</p>
@@ -75,7 +75,7 @@ export default function HumanCritiquePanel({
             const draft = drafts[idea.modelId] ?? { strengths: "", weaknesses: "", suggestions: "" };
 
             return (
-              <div key={idea.modelId} className="border border-border/70 rounded-xl p-4">
+              <div key={idea.modelId} className="border-b border-border/70 pb-4">
                 <div className="flex items-center gap-2 mb-3">
                   <span className="w-2 h-2 rounded-full" style={{ backgroundColor: identity.color }} />
                   <span className="text-text-primary font-medium">{identity.name}</span>
@@ -97,7 +97,7 @@ export default function HumanCritiquePanel({
                       }
                       rows={4}
                       placeholder={field[0].toUpperCase() + field.slice(1)}
-                      className="w-full rounded-lg border border-border bg-bg-deep px-3 py-2 text-sm text-text-primary"
+                      className="w-full border border-border/70 bg-bg-deep px-3 py-2 text-sm text-text-primary outline-none transition-colors focus:border-accent"
                     />
                   ))}
                 </div>

@@ -44,7 +44,7 @@ export async function fetchArchivePage(filters: ArchiveFilters = {}) {
         paginationOpts,
         categoryId: filters.categoryId || undefined,
         status: filters.status || undefined,
-        visibility: filters.visibility ?? "public_full",
+        visibility: filters.visibility,
         createdAfter: filters.createdAfter,
         createdBefore: filters.createdBefore,
       },
@@ -62,7 +62,7 @@ export async function fetchArchivePage(filters: ArchiveFilters = {}) {
       paginationOpts,
       categoryId: filters.categoryId || undefined,
       status: filters.status || undefined,
-      visibility: filters.visibility ?? "public_full",
+      visibility: filters.visibility,
       createdAfter: filters.createdAfter,
       createdBefore: filters.createdBefore,
     },
@@ -82,7 +82,6 @@ export async function fetchArchiveSummaries(): Promise<BenchmarkRunSummary[]> {
     const page = await fetchArchivePage({
       cursor,
       numItems: 50,
-      visibility: "public_full",
     });
     results.push(...page.page);
     if (page.isDone) {

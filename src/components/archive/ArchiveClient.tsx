@@ -1,12 +1,11 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { motion } from "framer-motion";
 import { clsx } from "clsx";
 import { BenchmarkRunSummary } from "@/types";
 import { getCategoryIdentity } from "@/utils/category-identity";
-import { StatusBadge } from "@/components/ui/Badge";
 
 interface ArchiveClientProps {
   runs: BenchmarkRunSummary[];
@@ -40,6 +39,10 @@ export default function ArchiveClient({ runs, nextCursor, hasMore, filters }: Ar
     () => (filterCategory === "all" ? runs : runs.filter((run) => run.categoryId === filterCategory)),
     [filterCategory, runs],
   );
+
+  useEffect(() => {
+    setFilterCategory(filters.categoryId);
+  }, [filters.categoryId]);
 
   if (runs.length === 0) {
     return (
@@ -174,7 +177,7 @@ export default function ArchiveClient({ runs, nextCursor, hasMore, filters }: Ar
               animate={{ opacity: 1 }}
               transition={{ delay: index * 0.03 }}
             >
-              <Link href={`/arena/${run.id}`}>
+              <Link href={`/archive/${run.id}`}>
                 <div className="group flex items-center gap-4 border-b border-border/50 px-1 py-5 transition-colors hover:bg-white/[0.02]">
                   <div className="flex w-36 flex-shrink-0 items-center gap-3">
                     <span className="h-2 w-2 rounded-full" style={{ backgroundColor: identity.color }} />
@@ -197,7 +200,9 @@ export default function ArchiveClient({ runs, nextCursor, hasMore, filters }: Ar
                   </div>
 
                   <div className="flex flex-shrink-0 items-center gap-4">
-                    <StatusBadge status={run.status} />
+                    <span className="font-mono text-[11px] uppercase tracking-[0.18em] text-text-muted">
+                      {run.status.replaceAll("_", " ")}
+                    </span>
                     <span className="hidden w-28 shrink-0 text-right font-mono text-sm text-text-muted lg:block">
                       {new Date(run.timestamp).toLocaleDateString()}
                     </span>

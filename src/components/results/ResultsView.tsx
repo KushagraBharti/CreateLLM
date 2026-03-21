@@ -9,8 +9,6 @@ import { api } from "../../../convex/_generated/api";
 import { getModelName } from "@/lib/models";
 import { getModelIdentity, getModelOrder } from "@/utils/model-identity";
 import Tabs, { TabItem } from "@/components/ui/Tabs";
-import Badge from "@/components/ui/Badge";
-import Button from "@/components/ui/Button";
 import IdeaCard from "./IdeaCard";
 import CritiqueCard from "./CritiqueCard";
 import RankingDisplay from "./RankingDisplay";
@@ -237,11 +235,11 @@ export default function ResultsView({
   ];
 
   const failurePanel = failedModelDetails.length > 0 && (
-    <div className="rounded-2xl border border-[#7C3E3E]/60 bg-[#2A1717]/55 p-4">
-      <p className="label mb-3">Failure Causes</p>
+    <div className="border-t border-[#7C3E3E]/45 pt-4">
+      <p className="label mb-4 text-[#D8A8A8]">Failure Causes</p>
       <div className="space-y-3">
         {failedModelDetails.map(({ modelId, model, stage, status, message }) => (
-          <div key={modelId} className="rounded-xl border border-[#7C3E3E]/40 bg-bg-deep/55 px-4 py-3">
+          <div key={modelId} className="border-l border-[#7C3E3E]/45 pl-4">
             <div className="flex items-center gap-2.5">
               <span className="w-2 h-2 rounded-full" style={{ backgroundColor: model.color }} />
               <span className="text-base text-text-primary">{model.name}</span>
@@ -259,59 +257,23 @@ export default function ResultsView({
   return (
     <div>
       <div className="mb-8">
-        <div className="flex items-center gap-3 mb-3 flex-wrap">
+        <div className="mb-3 flex flex-wrap items-center gap-x-4 gap-y-2">
           <span className="label capitalize">{run.categoryId}</span>
-          {isLive && run.status !== "complete" && run.status !== "partial" && <Badge color="#6BBF7B" pulse>Live</Badge>}
-          {failedModelDetails.length > 0 && <Badge color="#C75050">{failedModelDetails.length} issue{failedModelDetails.length === 1 ? "" : "s"}</Badge>}
+          {isLive && run.status !== "complete" && run.status !== "partial" && (
+            <span className="font-mono text-[11px] uppercase tracking-[0.2em] text-[#6BBF7B]">
+              live now
+            </span>
+          )}
+          {failedModelDetails.length > 0 && (
+            <span className="font-mono text-[11px] uppercase tracking-[0.2em] text-[#D8A8A8]">
+              {failedModelDetails.length} issue{failedModelDetails.length === 1 ? "" : "s"}
+            </span>
+          )}
         </div>
         <p className="text-text-primary font-medium text-base">{run.prompt}</p>
         <p className="font-mono text-base text-text-muted mt-1">
           {new Date(run.timestamp).toLocaleString()}
         </p>
-        {isAuthenticated && (
-          <div className="mt-4 flex flex-wrap items-center gap-3">
-            <Button
-              type="button"
-              variant="ghost"
-              onClick={() => {
-                setExportMessage("Queueing JSON export...");
-                void requestRunExport({ runId: run.id as never, format: "json" })
-                  .then(() => setExportMessage("JSON export queued."))
-                  .catch((error) =>
-                    setExportMessage(error instanceof Error ? error.message : "Failed to queue export.")
-                  );
-              }}
-            >
-              Export JSON
-            </Button>
-            <Button
-              type="button"
-              variant="ghost"
-              onClick={() => {
-                setExportMessage("Queueing CSV export...");
-                void requestRunExport({ runId: run.id as never, format: "csv" })
-                  .then(() => setExportMessage("CSV export queued."))
-                  .catch((error) =>
-                    setExportMessage(error instanceof Error ? error.message : "Failed to queue export.")
-                  );
-              }}
-            >
-              Export CSV
-            </Button>
-            {completedRunExports.map((entry) => (
-              <a
-                key={entry.id}
-                href={entry.downloadUrl ?? "#"}
-                target="_blank"
-                rel="noreferrer"
-                className="text-sm text-text-muted hover:text-text-primary transition-colors"
-              >
-                Download {entry.format.toUpperCase()}
-              </a>
-            ))}
-          </div>
-        )}
-        {exportMessage && <p className="mt-2 text-sm text-text-muted">{exportMessage}</p>}
       </div>
 
       <Tabs tabs={tabs} activeTab={activeTab} onTabChange={setActiveTab}>
@@ -469,7 +431,7 @@ export default function ResultsView({
             <RankingDisplay rankings={run.finalRankings} title="Final Rankings - Revised Ideas" showPodium showReasoning />
             {failurePanel}
             {run.status !== "complete" && (
-              <div className="border border-border rounded-xl p-4 bg-bg-surface/60">
+              <div className="border-t border-border pt-4">
                 <p className="label mb-2">Run Status</p>
                 <p className="text-base text-text-secondary">{run.currentStep}</p>
               </div>
@@ -483,6 +445,54 @@ export default function ResultsView({
           </motion.div>
         )}
       </Tabs>
+
+      {isAuthenticated && (
+        <div className="mt-10 border-t border-border/70 pt-4">
+          <div className="flex flex-wrap items-center gap-x-5 gap-y-3">
+            <span className="label">Exports</span>
+            <button
+              type="button"
+              onClick={() => {
+                setExportMessage("Queueing JSON export...");
+                void requestRunExport({ runId: run.id as never, format: "json" })
+                  .then(() => setExportMessage("JSON export queued."))
+                  .catch((error) =>
+                    setExportMessage(error instanceof Error ? error.message : "Failed to queue export."),
+                  );
+              }}
+              className="text-sm uppercase tracking-[0.18em] text-text-muted transition-colors hover:text-text-primary"
+            >
+              Queue JSON
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setExportMessage("Queueing CSV export...");
+                void requestRunExport({ runId: run.id as never, format: "csv" })
+                  .then(() => setExportMessage("CSV export queued."))
+                  .catch((error) =>
+                    setExportMessage(error instanceof Error ? error.message : "Failed to queue export."),
+                  );
+              }}
+              className="text-sm uppercase tracking-[0.18em] text-text-muted transition-colors hover:text-text-primary"
+            >
+              Queue CSV
+            </button>
+            {completedRunExports.map((entry) => (
+              <a
+                key={entry.id}
+                href={entry.downloadUrl ?? "#"}
+                target="_blank"
+                rel="noreferrer"
+                className="text-sm text-text-muted transition-colors hover:text-text-primary"
+              >
+                Download {entry.format.toUpperCase()}
+              </a>
+            ))}
+          </div>
+          {exportMessage ? <p className="mt-3 text-sm text-text-muted">{exportMessage}</p> : null}
+        </div>
+      )}
     </div>
   );
 }

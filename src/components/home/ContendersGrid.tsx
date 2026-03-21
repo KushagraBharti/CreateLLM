@@ -44,7 +44,7 @@ export default function ContendersGrid() {
           ))}
         </div>
 
-        <div className="grid grid-cols-1 gap-px bg-border sm:grid-cols-2 lg:grid-cols-4">
+        <div className="border-t border-border/70">
           {filteredModels.map((model, index) => {
             return (
               <motion.div
@@ -54,34 +54,36 @@ export default function ContendersGrid() {
                 viewport={{ once: true, margin: "-40px" }}
                 transition={{ duration: 0.35, delay: index * 0.03 }}
               >
-                <div className="group flex h-full flex-col justify-between bg-bg-deep p-6 transition-colors hover:bg-bg-surface">
-                  <div>
-                    <div className="mb-5 flex items-start justify-between gap-4">
-                      <span className="font-mono text-sm text-text-muted">
-                        {String(index + 1).padStart(2, "0")}
-                      </span>
-                      <span
-                        className="h-1.5 w-1.5 rounded-full opacity-50 transition-opacity group-hover:opacity-100"
-                        style={{ backgroundColor: model.color }}
-                      />
-                    </div>
-
-                    <h3 className="font-display text-2xl leading-tight text-text-primary transition-colors group-hover:text-accent">
+                <div className="group grid gap-4 border-b border-border/60 py-6 transition-colors lg:grid-cols-[0.9fr_1.6fr_0.9fr] lg:gap-6">
+                  <div className="flex items-start gap-4">
+                    <span className="font-mono text-sm text-text-muted">
+                      {String(index + 1).padStart(2, "0")}
+                    </span>
+                    <div>
+                      <h3 className="font-display text-2xl leading-tight text-text-primary transition-colors group-hover:text-accent">
                       {model.name}
-                    </h3>
-                    <p className="mt-2 text-sm uppercase tracking-[0.18em] text-text-muted">
-                      {model.lab} · {model.tier}
-                    </p>
-                    <p className="mt-5 text-base leading-relaxed text-text-secondary">
-                      {model.description}
-                    </p>
+                      </h3>
+                      <p className="mt-2 text-sm uppercase tracking-[0.18em] text-text-muted">
+                        {model.lab} · {model.tier}
+                      </p>
+                    </div>
                   </div>
 
-                  <div className="mt-8 flex items-center justify-between border-t border-border/70 pt-4 text-sm">
-                    <span className="text-text-muted">{model.provider}</span>
-                    <span className="text-text-muted">
-                      {model.defaultEnabled ? "Default roster" : "Optional pick"}
-                    </span>
+                  <p className="text-base leading-relaxed text-text-secondary">
+                    {model.description}
+                  </p>
+
+                  <div className="flex items-start justify-between gap-4 lg:justify-end">
+                    <span className="text-sm text-text-muted">{model.provider}</span>
+                    <div className="flex items-center gap-3">
+                      <span
+                        className="h-1.5 w-1.5 rounded-full opacity-70 transition-opacity group-hover:opacity-100"
+                        style={{ backgroundColor: model.color }}
+                      />
+                      <span className="text-sm text-text-muted">
+                        {model.defaultEnabled ? "Default roster" : "Optional pick"}
+                      </span>
+                    </div>
                   </div>
                 </div>
               </motion.div>

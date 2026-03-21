@@ -9,6 +9,8 @@ import {
   callOpenRouterTurnWithKey,
   callOpenRouterWithKey,
   estimateOpenRouterCostUsd,
+  streamOpenRouterTurnWithKey,
+  streamOpenRouterWithKey,
 } from "./lib/openrouter";
 import { searchWebWithExaKey } from "./lib/exa";
 import { getCategoryById } from "@/lib/categories";
@@ -29,7 +31,7 @@ import {
   buildGeneratePrompt,
   buildRevisionPrompt,
 } from "@/lib/prompts";
-import type { ChatMessage } from "@/lib/openrouter";
+import type { ChatMessage, ReasoningDetail } from "@/lib/openrouter";
 import {
   normalizeCritiqueVoteResponse,
   normalizeFinalVoteResponse,
@@ -234,6 +236,88 @@ function hasWebTraceContent(trace: StageWebTrace) {
   );
 }
 
+function toReasoningDetailId(
+  stage: "generate" | "revise",
+  modelId: string,
+  detail: ReasoningDetail,
+  fallbackIndex: number,
+) {
+  return detail.id ?? `${stage}:${modelId}:${detail.type}:${detail.index ?? fallbackIndex}`;
+}
+
+function createChunkPublisher(
+  ctx: ActionCtx,
+  params: {
+    runId: string;
+    stage: "generate" | "revise";
+    modelId: string;
+  },
+) {
+  let buffer = "";
+
+  return {
+    push: async (chunk: string) => {
+      buffer += chunk;
+      if (buffer.length >= 120 || /[\n.!?]$/.test(chunk)) {
+        const flushed = buffer;
+        buffer = "";
+        await ctx.runMutation(internal.runs.appendLiveTokenEventInternal, {
+          runId: params.runId as never,
+          stage: params.stage,
+          participantModelId: params.modelId,
+          chunk: flushed,
+          createdAt: Date.now(),
+        });
+      }
+    },
+    flush: async () => {
+      if (!buffer) return;
+      const flushed = buffer;
+      buffer = "";
+      await ctx.runMutation(internal.runs.appendLiveTokenEventInternal, {
+        runId: params.runId as never,
+        stage: params.stage,
+        participantModelId: params.modelId,
+        chunk: flushed,
+        createdAt: Date.now(),
+      });
+    },
+  };
+}
+
+async function publishReasoningDetails(
+  ctx: ActionCtx,
+  params: {
+    runId: string;
+    stage: "generate" | "revise";
+    modelId: string;
+    turn?: number;
+    details: ReasoningDetail[];
+  },
+) {
+  if (params.details.length === 0) {
+    return;
+  }
+
+  await ctx.runMutation(internal.runs.appendReasoningDetailsInternal, {
+    runId: params.runId as never,
+    stage: params.stage,
+    participantModelId: params.modelId,
+    turn: params.turn,
+    details: params.details.map((detail, index) => ({
+      detailId: toReasoningDetailId(params.stage, params.modelId, detail, index),
+      detailType: detail.type,
+      format: detail.format,
+      index: detail.index ?? index,
+      text: detail.text,
+      summary: detail.summary,
+      data: detail.data,
+      signature: detail.signature ?? undefined,
+    })),
+    createdAt: Date.now(),
+  });
+}
+
 function priorSourcesFromEvents(
   events: any[],
   modelId: string,
@@ -344,6 +428,18 @@ async function executeSearchToolCall(
     },
   };
 
+  await ctx.runMutation(internal.runs.appendToolCallEventInternal, {
+    runId: params.runId as never,
+    stage: params.stage,
+    participantModelId: params.modelId,
+    state: "started",
+    toolName: "search_web",
+    callId: params.toolCall.id,
+    turn: params.turn,
+    query: args.query,
+    createdAt: Date.now(),
+  });
+
   try {
     const payload = dedupeSearchPayload(
       await searchWebWithExaKey(params.exaApiKey, args, {
@@ -402,6 +498,20 @@ async function executeSearchToolCall(
       },
     };
 
+    await ctx.runMutation(internal.runs.appendToolCallEventInternal, {
+      runId: params.runId as never,
+      stage: params.stage,
+      participantModelId: params.modelId,
+      state: "completed",
+      toolName: "search_web",
+      callId: params.toolCall.id,
+      turn: params.turn,
+      query: payload.query,
+      resultCount: payload.results.length,
+      urls: payload.results.map((result) => result.url),
+      createdAt: Date.now(),
+    });
+
     return {
       trace,
       toolMessage: {
@@ -434,6 +544,19 @@ async function executeSearchToolCall(
       },
     };
 
+    await ctx.runMutation(internal.runs.appendToolCallEventInternal, {
+      runId: params.runId as never,
+      stage: params.stage,
+      participantModelId: params.modelId,
+      state: "failed",
+      toolName: "search_web",
+      callId: params.toolCall.id,
+      turn: params.turn,
+      query: args.query,
+      error: message,
+      createdAt: Date.now(),
+    });
+
     throw Object.assign(error instanceof Error ? error : new Error(message), {
       trace,
     });
@@ -455,6 +578,11 @@ async function runIdeaStageWithOptionalWebSearch(
   },
 ) {
   let trace = createStageWebTrace(params.stage, params.participant.modelId);
+  const chunkPublisher = createChunkPublisher(ctx, {
+    runId: params.runId,
+    stage: params.stage,
+    modelId: params.participant.modelId,
+  });
   const downgradeReason = toolDowngradeReason({
     policy: params.policy,
     exaApiKey: params.exaApiKey,
@@ -469,12 +597,21 @@ async function runIdeaStageWithOptionalWebSearch(
         downgradedReason: downgradeReason,
       },
     };
-    const fallback = await callOpenRouterWithKey({
+    const fallback = await streamOpenRouterWithKey({
       apiKey: params.apiKey,
       openRouterId: params.participant.openRouterId,
       messages: params.fallbackMessages,
       reasoning: params.reasoning,
+      onContentChunk: (chunk) => chunkPublisher.push(chunk),
+      onReasoningDetails: (details) =>
+        publishReasoningDetails(ctx, {
+          runId: params.runId,
+          stage: params.stage,
+          modelId: params.participant.modelId,
+          details,
+        }),
     });
+    await chunkPublisher.flush();
     return {
       raw: fallback.raw,
       usage: fallback.usage,
@@ -488,7 +625,7 @@ async function runIdeaStageWithOptionalWebSearch(
 
   try {
     for (let turn = 0; turn < DEFAULT_WEB_SEARCH_CONFIG.maxLoopTurns; turn++) {
-      const turnResult = await callOpenRouterTurnWithKey({
+      const turnResult = await streamOpenRouterTurnWithKey({
         apiKey: params.apiKey,
         openRouterId: params.participant.openRouterId,
         messages,
@@ -496,6 +633,15 @@ async function runIdeaStageWithOptionalWebSearch(
         tools: [SEARCH_WEB_TOOL],
         toolChoice: "auto",
         parallelToolCalls: false,
+        onContentChunk: (chunk) => chunkPublisher.push(chunk),
+        onReasoningDetails: (details) =>
+          publishReasoningDetails(ctx, {
+            runId: params.runId,
+            stage: params.stage,
+            modelId: params.participant.modelId,
+            turn,
+            details,
+          }),
       });
       totalUsage = sumUsage(totalUsage, turnResult.usage);
 
@@ -506,6 +652,7 @@ async function runIdeaStageWithOptionalWebSearch(
       });
 
       if (turnResult.toolCalls.length === 0) {
+        await chunkPublisher.flush();
         return {
           raw: turnResult.content,
           usage: totalUsage,
@@ -555,13 +702,22 @@ async function runIdeaStageWithOptionalWebSearch(
           downgradedReason: (error as Error).message,
         },
       };
-      const fallback = await callOpenRouterWithKey({
+      const fallback = await streamOpenRouterWithKey({
         apiKey: params.apiKey,
         openRouterId: params.participant.openRouterId,
         messages: params.fallbackMessages,
         reasoning: params.reasoning,
+        onContentChunk: (chunk) => chunkPublisher.push(chunk),
+        onReasoningDetails: (details) =>
+          publishReasoningDetails(ctx, {
+            runId: params.runId,
+            stage: params.stage,
+            modelId: params.participant.modelId,
+            details,
+          }),
       });
       totalUsage = sumUsage(totalUsage, fallback.usage);
+      await chunkPublisher.flush();
       return {
         raw: fallback.raw,
         usage: totalUsage,

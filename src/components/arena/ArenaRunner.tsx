@@ -73,7 +73,7 @@ export default function ArenaRunner({
       className="space-y-6"
     >
       {/* Progress */}
-      <div className="border border-border rounded-lg p-6">
+      <div className="border-t border-border pt-6">
         <StageOrbs status={status} checkpointStage={run?.checkpoint.stage} />
       </div>
 

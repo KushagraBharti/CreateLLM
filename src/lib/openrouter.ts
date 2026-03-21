@@ -1,5 +1,6 @@
 import { ReasoningDetailRecord } from "@/types";
 import { getOpenRouterCircuitBreaker } from "./circuit-breaker";
+import { MODEL_TIMEOUT_MS } from "./runtime-config";
 
 const OPENROUTER_API_URL = "https://openrouter.ai/api/v1/chat/completions";
 
@@ -98,7 +99,7 @@ export interface CallModelOptions {
   parallelToolCalls?: boolean;
 }
 
-const DEFAULT_TIMEOUT_MS = 90_000;
+const DEFAULT_TIMEOUT_MS = MODEL_TIMEOUT_MS;
 
 export function buildChatCompletionBody(
   openRouterId: string,

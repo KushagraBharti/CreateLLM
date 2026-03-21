@@ -9,7 +9,6 @@ import { LeaderboardData, RunExportEntry } from "@/types";
 import RankingsTable from "@/components/leaderboard/RankingsTable";
 import CategoryFilter from "@/components/leaderboard/CategoryFilter";
 import AnimatedNumber from "@/components/ui/AnimatedNumber";
-import Button from "@/components/ui/Button";
 
 export default function LeaderboardClient({ data }: { data: LeaderboardData }) {
   const { isAuthenticated } = useConvexAuth();
@@ -96,31 +95,6 @@ export default function LeaderboardClient({ data }: { data: LeaderboardData }) {
         getCategoryRuns={getCategoryRuns}
       />
 
-      {isAuthenticated ? (
-        <div className="rounded-xl border border-border p-4 space-y-3">
-          <div className="flex flex-wrap items-center gap-3">
-            <Button type="button" variant="ghost" onClick={() => queueExport("json")}>
-              Export {selectedCategory === "all" ? "Global" : selectedCategory} JSON
-            </Button>
-            <Button type="button" variant="ghost" onClick={() => queueExport("csv")}>
-              Export {selectedCategory === "all" ? "Global" : selectedCategory} CSV
-            </Button>
-            {completedExports.map((entry) => (
-              <a
-                key={entry.id}
-                href={entry.downloadUrl ?? "#"}
-                target="_blank"
-                rel="noreferrer"
-                className="text-sm text-text-muted hover:text-text-primary transition-colors"
-              >
-                Download {entry.format.toUpperCase()}
-              </a>
-            ))}
-          </div>
-          {exportMessage ? <p className="text-sm text-text-muted">{exportMessage}</p> : null}
-        </div>
-      ) : null}
-
       {selectedCategory === "all" ? (
         <RankingsTable
           entries={data.global}
@@ -134,6 +108,40 @@ export default function LeaderboardClient({ data }: { data: LeaderboardData }) {
           subtitle={`Composite standing across ${getCategoryRuns(selectedCategory)} run${getCategoryRuns(selectedCategory) === 1 ? "" : "s"} in this category`}
         />
       )}
+
+      {isAuthenticated ? (
+        <div className="border-t border-border/70 pt-4">
+          <div className="flex flex-wrap items-center gap-x-5 gap-y-3">
+            <span className="label">Exports</span>
+            <button
+              type="button"
+              onClick={() => queueExport("json")}
+              className="text-sm uppercase tracking-[0.18em] text-text-muted transition-colors hover:text-text-primary"
+            >
+              Queue {selectedCategory === "all" ? "Global" : selectedCategory} JSON
+            </button>
+            <button
+              type="button"
+              onClick={() => queueExport("csv")}
+              className="text-sm uppercase tracking-[0.18em] text-text-muted transition-colors hover:text-text-primary"
+            >
+              Queue {selectedCategory === "all" ? "Global" : selectedCategory} CSV
+            </button>
+            {completedExports.map((entry) => (
+              <a
+                key={entry.id}
+                href={entry.downloadUrl ?? "#"}
+                target="_blank"
+                rel="noreferrer"
+                className="text-sm text-text-muted transition-colors hover:text-text-primary"
+              >
+                Download {entry.format.toUpperCase()}
+              </a>
+            ))}
+          </div>
+          {exportMessage ? <p className="mt-3 text-sm text-text-muted">{exportMessage}</p> : null}
+        </div>
+      ) : null}
     </motion.div>
   );
 }

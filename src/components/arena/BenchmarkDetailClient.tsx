@@ -6,7 +6,6 @@ import { useRouter } from "next/navigation";
 import { motion } from "framer-motion";
 import { BenchmarkRun } from "@/types";
 import ResultsView from "@/components/results/ResultsView";
-import { StatusBadge } from "@/components/ui/Badge";
 import { useBenchmarkSSE } from "@/hooks/useBenchmarkSSE";
 import ArenaRunner from "@/components/arena/ArenaRunner";
 import HumanCritiquePanel from "@/components/arena/HumanCritiquePanel";
@@ -47,7 +46,9 @@ export default function BenchmarkDetailClient({
 
       <motion.div initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }}>
         <div className="mb-6">
-          <StatusBadge status={activeRun.status} />
+          <p className="font-mono text-[11px] uppercase tracking-[0.2em] text-text-muted">
+            {activeRun.status.replaceAll("_", " ")}
+          </p>
         </div>
         <div className="mb-8 space-y-6">
           <ArenaRunner

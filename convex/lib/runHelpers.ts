@@ -11,6 +11,7 @@ import type {
   RunCheckpoint,
   RunFailureRecord,
   StageWebTrace,
+  ReasoningDetailRecord,
 } from "@/types";
 import { DEFAULT_WEB_SEARCH_CONFIG, mergeStageWebTraces } from "@/lib/benchmark-web";
 import type { Doc, Id } from "../_generated/dataModel";
@@ -194,6 +195,79 @@ function mapWebState(events: Doc<"runEvents">[]) {
   return mergeStageWebTraces(Array.from(latestTraces.values()), DEFAULT_WEB_SEARCH_CONFIG);
 }
 
+function mergeReasoningDetailRecords(
+  target: Map<string, ReasoningDetailRecord>,
+  stage: "generate" | "revise",
+  modelId: string,
+  payload: {
+    detailId?: string;
+    detailType: ReasoningDetailRecord["type"];
+    format?: string;
+    index?: number;
+    text?: string;
+    summary?: string;
+    data?: string;
+    signature?: string | null;
+    turn?: number;
+  },
+  createdAt: number,
+) {
+  const detailId = payload.detailId ?? `${stage}:${modelId}:${payload.detailType}:${payload.index ?? 0}`;
+  const existing = target.get(detailId);
+  target.set(detailId, {
+    id: detailId,
+    stage,
+    modelId,
+    turn: payload.turn,
+    type: payload.detailType,
+    format: payload.format ?? existing?.format,
+    index: payload.index ?? existing?.index,
+    text: `${existing?.text ?? ""}${payload.text ?? ""}` || undefined,
+    summary: `${existing?.summary ?? ""}${payload.summary ?? ""}` || undefined,
+    data: `${existing?.data ?? ""}${payload.data ?? ""}` || undefined,
+    signature: payload.signature ?? existing?.signature,
+    updatedAt: toIso(createdAt),
+  });
+}
+
+function mapReasoningState(events: Doc<"runEvents">[]) {
+  const merged = new Map<string, ReasoningDetailRecord>();
+
+  for (const event of events) {
+    if (event.kind !== "reasoning_detail" || !event.payload || !event.participantModelId) {
+      continue;
+    }
+
+    mergeReasoningDetailRecords(
+      merged,
+      event.stage as "generate" | "revise",
+      event.participantModelId,
+      event.payload as {
+        detailId?: string;
+        detailType: ReasoningDetailRecord["type"];
+        format?: string;
+        index?: number;
+        text?: string;
+        summary?: string;
+        data?: string;
+        signature?: string | null;
+        turn?: number;
+      },
+      event.createdAt,
+    );
+  }
+
+  return {
+    details: Array.from(merged.values()).sort((a, b) => {
+      if (a.modelId !== b.modelId) return a.modelId.localeCompare(b.modelId);
+      if (a.stage !== b.stage) return a.stage.localeCompare(b.stage);
+      if ((a.turn ?? 0) !== (b.turn ?? 0)) return (a.turn ?? 0) - (b.turn ?? 0);
+      if (a.index !== undefined && b.index !== undefined && a.index !== b.index) return a.index - b.index;
+      return a.id.localeCompare(b.id);
+    }),
+  };
+}
+
 export function canReadRun(
   run: Doc<"runs">,
   viewerUserId: Id<"users"> | null,
@@ -299,9 +373,7 @@ export function runDocsToBenchmarkRun(args: {
       failureCount: 0,
     },
     web: mapWebState(args.events),
-    reasoning: {
-      details: [],
-    },
+    reasoning: mapReasoningState(args.events),
     metadata: {
       participantCount: args.run.participantCount,
       minimumSuccessfulModels: args.run.minimumSuccessfulModels,

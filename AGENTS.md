@@ -87,6 +87,7 @@ Do not casually change these unless the task explicitly requires it:
 - Model IDs and legacy aliases unless you are updating the catalog intentionally.
 - Function-level org/project authorization and BYOK provider boundaries.
 - The editorial dark visual language and page structure unless the task is a design rewrite.
+- Avoid generic card grids, rounded pill controls, and detached dashboard widgets unless the existing surface already uses them intentionally.
 
 ## Editing Rules
 
@@ -97,6 +98,7 @@ Do not casually change these unless the task explicitly requires it:
 - Do not touch generated directories like `.next/`, `.next-foundation/`, `node_modules/`, or `convex/_generated/`.
 - If prompt wording changes, update the prompt review workbook or related prompt docs.
 - If you change parsing or response shape, add or adjust tests in `src/lib/*.test.ts`.
+- When editing frontend surfaces, match the existing editorial system from the landing, dashboard, arena, and leaderboard before inventing new UI primitives.
 
 ## Working Style
 

@@ -1,6 +1,4 @@
 import Link from "next/link";
-import { redirect } from "next/navigation";
-import { isAuthenticatedNextjs } from "@convex-dev/auth/nextjs/server";
 import ArchiveClient from "@/components/archive/ArchiveClient";
 import { fetchArchivePage } from "@/lib/convex-server";
 
@@ -13,10 +11,6 @@ export default async function ArchivePage({
 }: {
   searchParams: Promise<Record<string, string | string[] | undefined>>;
 }) {
-  if (!(await isAuthenticatedNextjs())) {
-    redirect("/sign-in?redirect=%2Farchive");
-  }
-
   const params = await searchParams;
   const query = asSingle(params.q)?.trim() || undefined;
   const categoryId = asSingle(params.category) || undefined;
@@ -33,7 +27,6 @@ export default async function ArchivePage({
     cursor,
     createdAfter,
     createdBefore,
-    visibility: "public_full",
   });
 
   return (

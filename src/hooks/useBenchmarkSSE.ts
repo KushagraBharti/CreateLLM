@@ -70,6 +70,14 @@ export function useBenchmarkSSE() {
         }
       : "skip"
   );
+  const liveEvents = useQuery(
+    api.runs.liveActivity,
+    state.runId
+      ? {
+          runId: state.runId as never,
+        }
+      : "skip"
+  );
 
   useEffect(() => {
     if (liveRun === undefined || !liveRun) return;
@@ -92,6 +100,87 @@ export function useBenchmarkSSE() {
       };
     });
   }, [liveRun]);
+
+  useEffect(() => {
+    if (!liveEvents) return;
+
+    const nextStreamingText: Record<string, string> = {};
+    const nextToolActivity: Record<string, LiveToolActivity> = {};
+    const nextReasoningActivity: Record<string, LiveReasoningActivity> = {};
+
+    for (const event of liveEvents as Array<{
+      kind: string;
+      stage: "generate" | "revise";
+      participantModelId?: string;
+      payload?: {
+        chunk?: string;
+        state?: "started" | "completed" | "failed";
+        toolName?: "search_web";
+        callId?: string;
+        turn?: number;
+        query?: string;
+        resultCount?: number;
+        urls?: string[];
+        error?: string;
+        detailId?: string;
+        detailType?: "reasoning.summary" | "reasoning.encrypted" | "reasoning.text";
+        format?: string;
+        index?: number;
+        text?: string;
+        summary?: string;
+        data?: string;
+      } | null;
+    }>) {
+      if (!event.participantModelId) continue;
+
+      if (event.kind === "live_token") {
+        nextStreamingText[event.participantModelId] =
+          (nextStreamingText[event.participantModelId] ?? "") + String(event.payload?.chunk ?? "");
+        continue;
+      }
+
+      if (event.kind === "tool_call_activity" && event.payload?.callId && event.payload.toolName && event.payload.state) {
+        const key = `${event.stage}:${event.participantModelId}:${event.payload.callId}`;
+        nextToolActivity[key] = {
+          modelId: event.participantModelId,
+          stage: event.stage,
+          toolName: event.payload.toolName,
+          state: event.payload.state,
+          callId: event.payload.callId,
+          turn: event.payload.turn,
+          query: event.payload.query,
+          resultCount: event.payload.resultCount,
+          urls: event.payload.urls,
+          error: event.payload.error,
+        };
+        continue;
+      }
+
+      if (event.kind === "reasoning_detail" && event.payload?.detailId && event.payload.detailType) {
+        const key = `${event.stage}:${event.participantModelId}:${event.payload.detailId}`;
+        const existing = nextReasoningActivity[key];
+        nextReasoningActivity[key] = {
+          modelId: event.participantModelId,
+          stage: event.stage,
+          detailId: event.payload.detailId,
+          turn: event.payload.turn ?? existing?.turn,
+          detailType: event.payload.detailType,
+          format: event.payload.format ?? existing?.format,
+          index: event.payload.index ?? existing?.index,
+          text: `${existing?.text ?? ""}${event.payload.text ?? ""}` || undefined,
+          summary: `${existing?.summary ?? ""}${event.payload.summary ?? ""}` || undefined,
+          data: `${existing?.data ?? ""}${event.payload.data ?? ""}` || undefined,
+        };
+      }
+    }
+
+    setState((prev) => ({
+      ...prev,
+      streamingText: nextStreamingText,
+      toolActivity: nextToolActivity,
+      reasoningActivity: nextReasoningActivity,
+    }));
+  }, [liveEvents]);
 
   const connectToRun = useCallback((runId: string) => {
     setState((prev) => ({

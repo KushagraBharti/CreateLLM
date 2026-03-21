@@ -179,7 +179,7 @@ function ArenaContent() {
         {!showRunWorkspace ? (
           <motion.div key="form" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
             <form onSubmit={handleSubmit}>
-              <div className="relative border border-border rounded-xl overflow-hidden">
+              <div className="relative border border-border overflow-hidden">
                 <div className="absolute top-0 inset-x-0 h-px bg-gradient-to-r from-transparent via-accent/20 to-transparent" />
 
                 <div className="grid grid-cols-1 lg:grid-cols-2">
@@ -285,7 +285,7 @@ function ArenaContent() {
               )}
 
               {error && (
-                <div className="border border-[#C75050]/40 bg-[#C75050]/8 rounded-xl p-4 text-base text-text-secondary">
+                <div className="border-l border-[#C75050]/45 pl-4 text-base text-text-secondary">
                   {error}
                 </div>
               )}

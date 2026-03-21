@@ -249,6 +249,7 @@ export default defineSchema({
     .index("by_project_and_created_at", ["projectId", "createdAt"])
     .index("by_project_and_status_and_created_at", ["projectId", "status", "createdAt"])
     .index("by_org_and_created_at", ["organizationId", "createdAt"])
+    .index("by_created_at", ["createdAt"])
     .index("by_status_and_created_at", ["status", "createdAt"])
     .index("by_visibility_and_created_at", ["visibility", "createdAt"])
     .index("by_category_and_created_at", ["categoryId", "createdAt"]),

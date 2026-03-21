@@ -8,12 +8,8 @@ function isProtectedPage(pathname: string) {
   return (
     pathname === "/arena" ||
     pathname.startsWith("/arena/") ||
-    pathname === "/archive" ||
-    pathname.startsWith("/archive/") ||
     pathname === "/account" ||
-    pathname.startsWith("/account/") ||
-    pathname === "/settings" ||
-    pathname.startsWith("/settings/")
+    pathname.startsWith("/account/")
   );
 }
 

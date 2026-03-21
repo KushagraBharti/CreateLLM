@@ -71,7 +71,7 @@ export default function ModelStatusGrid({
   const modelIds = run?.selectedModels.map((model) => model.id) ?? getModelOrder();
 
   return (
-    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-px bg-border rounded-lg overflow-hidden">
+    <div className="border-t border-border/70">
       {modelIds.map((modelId) => {
         const model = getModelIdentity(modelId);
         const stageStatus = getModelStageStatus(modelId, run, status);
@@ -83,7 +83,7 @@ export default function ModelStatusGrid({
             : controlState?.note;
 
         return (
-          <div key={modelId} className="bg-bg-deep p-3 flex items-center gap-3">
+          <div key={modelId} className="flex items-start gap-3 border-b border-border/60 py-4">
             <span
               className="w-1.5 h-1.5 rounded-full flex-shrink-0 transition-colors duration-300"
               style={{
@@ -107,23 +107,40 @@ export default function ModelStatusGrid({
               }}
             />
 
-            <div className="min-w-0">
-              <span className="text-base text-text-primary block truncate">{model.name}</span>
-              <span className="text-base text-text-muted">
+            <div className="min-w-0 flex-1">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <span className="text-base text-text-primary block truncate">{model.name}</span>
+                <span className="font-mono text-[11px] uppercase tracking-[0.18em] text-text-muted">
+                  {stageStatus === "done"
+                    ? "Done"
+                    : stageStatus === "paused"
+                      ? "Paused"
+                      : stageStatus === "retrying"
+                        ? "Retry queued"
+                        : stageStatus === "failed"
+                          ? "Failed"
+                          : stageStatus === "canceled"
+                            ? "Canceled"
+                            : stageStatus === "thinking"
+                              ? "Working"
+                              : "Waiting"}
+                </span>
+              </div>
+              <p className="text-sm text-text-muted">
                 {stageStatus === "done"
-                  ? "Done"
+                  ? "Stage completed."
                   : stageStatus === "paused"
-                    ? "Paused"
+                    ? "Execution is paused."
                     : stageStatus === "retrying"
-                      ? "Retry queued"
-                  : stageStatus === "failed"
-                    ? "Failed"
-                    : stageStatus === "canceled"
-                      ? "Canceled"
-                    : stageStatus === "thinking"
-                      ? "Working..."
-                      : "Waiting"}
-              </span>
+                      ? "Retry attempt queued."
+                      : stageStatus === "failed"
+                        ? "Execution failed."
+                        : stageStatus === "canceled"
+                          ? "Execution canceled."
+                          : stageStatus === "thinking"
+                            ? "Currently processing."
+                            : "Waiting for this stage."}
+              </p>
               {statusNote && (
                 <p className="mt-1 text-xs leading-relaxed text-text-muted max-w-[26ch]">
                   {statusNote}

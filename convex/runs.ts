@@ -381,13 +381,16 @@ export const list = query({
     } else {
       pageResult = await ctx.db
         .query("runs")
-        .withIndex("by_visibility_and_created_at", (q) => q.eq("visibility", "public_full"))
+        .withIndex("by_created_at")
         .order("desc")
         .paginate(args.paginationOpts);
     }
 
     const visibleRuns: BenchmarkRunSummary[] = [];
     for (const run of pageResult.page as Doc<"runs">[]) {
+      if (args.visibility && run.visibility !== args.visibility) {
+        continue;
+      }
       if (args.categoryId && run.categoryId !== args.categoryId) {
         continue;
       }
@@ -448,6 +451,39 @@ export const listEvents = query({
   },
 });
 
+export const liveActivity = query({
+  args: {
+    runId: v.id("runs"),
+  },
+  returns: v.any(),
+  handler: async (ctx, args) => {
+    const accessible = await loadAccessibleRun(ctx, args.runId);
+    if (!accessible) {
+      throw new ConvexError("Run not found");
+    }
+
+    const events = await ctx.db
+      .query("runEvents")
+      .withIndex("by_run_and_created_at", (q) => q.eq("runId", args.runId))
+      .collect();
+
+    return events
+      .filter((event) =>
+        event.kind === "live_token" ||
+        event.kind === "tool_call_activity" ||
+        event.kind === "reasoning_detail",
+      )
+      .map((event) => ({
+        id: String(event._id),
+        kind: event.kind,
+        stage: event.stage,
+        participantModelId: event.participantModelId,
+        payload: event.payload ?? null,
+        createdAt: event.createdAt,
+      }));
+  },
+});
+
 export const listArtifacts = query({
   args: {
     runId: v.id("runs"),
@@ -489,11 +525,13 @@ export const search = query({
   handler: async (ctx, args) => {
     const limit = Math.min(args.limit ?? args.paginationOpts?.numItems ?? 20, 50);
     const viewerUserId = await getAuthUserId(ctx);
-    const visibility = args.visibility ?? "public_full";
 
     const searchQuery = ((ctx.db.query("runSearchDocs") as any)
       .withSearchIndex("search_prompt", (q: any) => {
-        let next = q.search("promptSearchText", args.query).eq("visibility", visibility);
+        let next = q.search("promptSearchText", args.query);
+        if (args.visibility) {
+          next = next.eq("visibility", args.visibility);
+        }
         if (args.organizationId) {
           next = next.eq("organizationId", args.organizationId);
         }
@@ -524,6 +562,9 @@ export const search = query({
     for (const match of matchesPage.page as Doc<"runSearchDocs">[]) {
       const run = await ctx.db.get(match.runId);
       if (!run) {
+        continue;
+      }
+      if (args.visibility && run.visibility !== args.visibility) {
         continue;
       }
       if (!matchesCreatedAtRange(run.createdAt, args.createdAfter, args.createdBefore)) {
@@ -1255,6 +1296,111 @@ export const recordWebTraceInternal = internalMutation({
     await ctx.db.patch(args.runId, {
       updatedAt: args.createdAt,
     });
+    return null;
+  },
+});
+
+export const appendLiveTokenEventInternal = internalMutation({
+  args: {
+    runId: v.id("runs"),
+    stage: v.union(v.literal("generate"), v.literal("revise")),
+    participantModelId: v.string(),
+    chunk: v.string(),
+    createdAt: v.number(),
+  },
+  returns: v.null(),
+  handler: async (ctx, args) => {
+    await ctx.db.insert("runEvents", {
+      runId: args.runId,
+      stage: args.stage,
+      kind: "live_token",
+      participantModelId: args.participantModelId,
+      message: `${args.participantModelId} ${args.stage} token chunk`,
+      payload: { chunk: args.chunk },
+      createdAt: args.createdAt,
+    });
+    await ctx.db.patch(args.runId, { updatedAt: args.createdAt });
+    return null;
+  },
+});
+
+export const appendToolCallEventInternal = internalMutation({
+  args: {
+    runId: v.id("runs"),
+    stage: v.union(v.literal("generate"), v.literal("revise")),
+    participantModelId: v.string(),
+    state: v.union(v.literal("started"), v.literal("completed"), v.literal("failed")),
+    toolName: v.literal("search_web"),
+    callId: v.string(),
+    turn: v.optional(v.number()),
+    query: v.optional(v.string()),
+    resultCount: v.optional(v.number()),
+    urls: v.optional(v.array(v.string())),
+    error: v.optional(v.string()),
+    createdAt: v.number(),
+  },
+  returns: v.null(),
+  handler: async (ctx, args) => {
+    await ctx.db.insert("runEvents", {
+      runId: args.runId,
+      stage: args.stage,
+      kind: "tool_call_activity",
+      participantModelId: args.participantModelId,
+      message: `${args.participantModelId} ${args.stage} ${args.toolName} ${args.state}`,
+      payload: {
+        state: args.state,
+        toolName: args.toolName,
+        callId: args.callId,
+        turn: args.turn,
+        query: args.query,
+        resultCount: args.resultCount,
+        urls: args.urls,
+        error: args.error,
+      },
+      createdAt: args.createdAt,
+    });
+    await ctx.db.patch(args.runId, { updatedAt: args.createdAt });
+    return null;
+  },
+});
+
+export const appendReasoningDetailsInternal = internalMutation({
+  args: {
+    runId: v.id("runs"),
+    stage: v.union(v.literal("generate"), v.literal("revise")),
+    participantModelId: v.string(),
+    turn: v.optional(v.number()),
+    details: v.array(
+      v.object({
+        detailId: v.string(),
+        detailType: v.union(v.literal("reasoning.summary"), v.literal("reasoning.encrypted"), v.literal("reasoning.text")),
+        format: v.optional(v.string()),
+        index: v.optional(v.number()),
+        text: v.optional(v.string()),
+        summary: v.optional(v.string()),
+        data: v.optional(v.string()),
+        signature: v.optional(v.string()),
+      }),
+    ),
+    createdAt: v.number(),
+  },
+  returns: v.null(),
+  handler: async (ctx, args) => {
+    for (const detail of args.details) {
+      await ctx.db.insert("runEvents", {
+        runId: args.runId,
+        stage: args.stage,
+        kind: "reasoning_detail",
+        participantModelId: args.participantModelId,
+        message: `${args.participantModelId} ${args.stage} reasoning detail`,
+        payload: {
+          ...detail,
+          turn: args.turn,
+        },
+        createdAt: args.createdAt,
+      });
+    }
+    await ctx.db.patch(args.runId, { updatedAt: args.createdAt });
     return null;
   },
 });
