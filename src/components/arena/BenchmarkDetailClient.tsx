@@ -63,10 +63,6 @@ export default function BenchmarkDetailClient({
                 router.push(`/arena/${next.id}`);
               }
             }}
-            onPauseModel={(modelId) => live.pauseModel(modelId)}
-            onResumeModel={(modelId) => live.resumeModel(modelId)}
-            onRetryModel={(modelId) => live.retryModel(modelId)}
-            onCancelModel={(modelId) => live.cancelModel(modelId)}
           />
           {activeRun.status === "awaiting_human_critique" && (
             <HumanCritiquePanel

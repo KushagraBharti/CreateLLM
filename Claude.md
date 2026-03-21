@@ -7,14 +7,15 @@ This repository is a live LLM creativity benchmark. If you are Claude or another
 Read in this order:
 
 1. `README.md` for the public-facing product shape.
-2. `src/lib/categories.ts` for the domain taxonomy and output schemas.
-3. `src/lib/models.ts` for the model roster and selection rules.
-4. `src/lib/prompts.ts` and `src/lib/prompt-copy.ts` for the stage prompt contract.
-5. `src/lib/engine.ts` for the execution pipeline.
-6. `src/lib/storage.ts` and `src/lib/run-scheduler.ts` for persistence and orchestration.
-7. `src/lib/structured-output.ts` and `src/lib/openrouter.ts` for parsing and API behavior.
-8. `src/components/arena` and `src/components/results` for the live UI and result views.
-9. `docs/prompt-review-workbook.md` when changing prompt wording or stage behavior.
+2. `convex/_generated/ai/guidelines.md` for the Convex-specific rules that override generic habits.
+3. `src/lib/categories.ts` for the domain taxonomy and output schemas.
+4. `src/lib/models.ts` for the model roster and selection rules.
+5. `src/lib/prompts.ts` and `src/lib/prompt-copy.ts` for the stage prompt contract.
+6. `convex/schema.ts`, `convex/runs.ts`, and `convex/benchmarkWorkflow.ts` for the backend contract.
+7. `convex/benchmarkActions.ts`, `convex/settings.ts`, and `convex/settingsActions.ts` for provider execution, BYOK, and policy logic.
+8. `src/lib/structured-output.ts`, `src/lib/openrouter.ts`, and `src/lib/benchmark-web.ts` for parsing and provider behavior.
+9. `src/components/arena` and `src/components/results` for the live UI and result views.
+10. `docs/prompt-review-workbook.md` when changing prompt wording or stage behavior.
 
 ## What The App Does
 
@@ -25,34 +26,34 @@ NovelBench runs a four-stage competition over selected models:
 3. Optionally accept human critique.
 4. Revise, then run a final anonymous vote.
 
-Runs are stored as local JSON files and replayed through the archive, results pages, and leaderboard.
+Runs are stored in Convex as compact summaries plus append-only events, participants, and artifacts, then replayed through the archive, results pages, and leaderboard.
 
 ## Technical Flow
 
 The main path is:
 
-`UI -> POST /api/benchmark -> run scheduler -> engine -> OpenRouter -> storage -> SSE updates -> results/archive/leaderboard`
+`UI -> POST /api/benchmark -> Convex mutation -> Convex workflow/workpool -> OpenRouter and Exa -> Convex tables/file storage -> realtime queries -> results/archive/leaderboard`
 
 Important implementation details:
 
 - `src/app/arena/page.tsx` starts a run from the browser.
 - `src/app/api/benchmark/route.ts` creates a run and queues it.
-- `src/lib/run-scheduler.ts` manages queueing, resumption, cancellation, and retry.
-- `src/lib/engine.ts` executes the benchmark stage by stage.
-- `src/app/api/benchmark/[id]/events/route.ts` streams progress and token chunks to the client.
-- `src/lib/storage.ts` persists runs to `data/runs/*.json`.
+- `convex/runs.ts` defines run creation, access control, event queries, and policy enforcement.
+- `convex/benchmarkWorkflow.ts` orchestrates the durable multi-stage run lifecycle.
+- `convex/benchmarkActions.ts` executes provider calls, optional Exa search, and stage persistence.
+- `src/hooks/useBenchmarkSSE.ts` is now a Convex-backed live run hook despite the legacy name.
 - `src/lib/results.ts` aggregates archive and leaderboard data from saved runs.
 
 ## Repo Structure
 
 - `src/app` - route segments, page entry points, loading states, and API routes.
 - `src/components` - feature UI, result cards, controls, and shared primitives.
-- `src/lib` - benchmark core, persistence, prompt building, parsing, model catalog, results aggregation.
-- `src/hooks` - client hooks for SSE and easter eggs.
+- `src/lib` - prompts, parsing, shared provider helpers, model catalog, results aggregation.
+- `src/hooks` - client hooks for live Convex state and easter eggs.
 - `src/types` - shared domain types and run shapes.
 - `src/utils` - identity helpers and animation variants.
+- `convex` - schema, auth, queries, mutations, actions, workflows, and backend helpers.
 - `docs` - operational references for prompts and prompt review.
-- `data/runs` - persisted benchmark runs.
 
 ## Source Of Truth Files
 
@@ -66,9 +67,11 @@ If you need to understand or change behavior, these files are the source of trut
 - OpenRouter request shape and streaming: `src/lib/openrouter.ts`
 - Retry timing and reasoning config: `src/lib/prompt-runtime.ts`
 - Structured output repair: `src/lib/structured-output.ts`
-- Run orchestration: `src/lib/run-scheduler.ts`
-- Execution engine: `src/lib/engine.ts`
-- Storage format: `src/lib/storage.ts`
+- Shared web-search helpers: `src/lib/benchmark-web.ts`
+- Run orchestration and access control: `convex/runs.ts`
+- Workflow execution: `convex/benchmarkWorkflow.ts`
+- Provider stage execution: `convex/benchmarkActions.ts`
+- Storage format and indexes: `convex/schema.ts`
 
 ## Invariants To Preserve
 
@@ -78,10 +81,11 @@ Do not casually change these unless the task explicitly requires it:
 - The 2 to 8 model selection limit.
 - Anonymous critique and vote labels.
 - The JSON-first prompt contract for generate/critique/revise/vote.
-- The SSE event contract used by `useBenchmarkSSE`.
-- File-based run persistence in `data/runs`.
+- The Convex live state contract consumed by `useBenchmarkSSE`.
+- Append-only run events, participants, and artifacts in Convex.
 - Category IDs and their stable identity mapping.
 - Model IDs and legacy aliases unless you are updating the catalog intentionally.
+- Function-level org/project authorization and BYOK provider boundaries.
 - The editorial dark visual language and page structure unless the task is a design rewrite.
 
 ## Editing Rules
@@ -90,8 +94,7 @@ Do not casually change these unless the task explicitly requires it:
 - Use `apply_patch` for code edits.
 - Prefer the smallest possible change that solves the problem.
 - Do not revert user changes or unrelated edits.
-- Do not touch generated directories like `.next/` or `node_modules/`.
-- Do not commit `data/` contents unless the task explicitly asks for persisted sample data.
+- Do not touch generated directories like `.next/`, `.next-foundation/`, `node_modules/`, or `convex/_generated/`.
 - If prompt wording changes, update the prompt review workbook or related prompt docs.
 - If you change parsing or response shape, add or adjust tests in `src/lib/*.test.ts`.
 
@@ -99,8 +102,8 @@ Do not casually change these unless the task explicitly requires it:
 
 - Start by tracing the actual runtime path instead of guessing.
 - Use the browser or UI only when the change affects client behavior.
-- Use local tests to confirm parsing, aggregation, scheduler logic, and model catalog rules.
-- When you are uncertain about a contract, inspect the existing run JSON in `data/runs` before changing code.
+- Use local tests to confirm parsing, aggregation, workflow logic, policy enforcement, and model catalog rules.
+- When you are uncertain about a contract, inspect the Convex schema, queries, and hydrated run shape before changing code.
 
 ## Practical Reading Order For Fast Onboarding
 
@@ -110,12 +113,13 @@ If you are trying to learn the repo quickly, this is the shortest path:
 2. `src/lib/categories.ts`
 3. `src/lib/models.ts`
 4. `src/lib/prompts.ts`
-5. `src/lib/engine.ts`
-6. `src/lib/run-scheduler.ts`
-7. `src/lib/storage.ts`
-8. `src/app/arena/page.tsx`
-9. `src/components/results/ResultsView.tsx`
-10. `src/lib/results.ts`
+5. `convex/schema.ts`
+6. `convex/runs.ts`
+7. `convex/benchmarkWorkflow.ts`
+8. `convex/benchmarkActions.ts`
+9. `src/app/arena/page.tsx`
+10. `src/components/results/ResultsView.tsx`
+11. `src/lib/results.ts`
 
 <!-- convex-ai-start -->
 This project uses [Convex](https://convex.dev) as its backend.

@@ -1,11 +1,11 @@
 import { NextRequest } from "next/server";
-import { proceedBenchmarkRun } from "@/lib/run-scheduler";
+import { proceedBenchmarkRunServer } from "@/lib/convex-server";
 
 export async function POST(
   _request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
   const { id } = await params;
-  const run = await proceedBenchmarkRun(id);
+  const run = await proceedBenchmarkRunServer(id);
   return Response.json(run);
 }

@@ -52,10 +52,6 @@ function ArenaContent() {
     proceedBenchmark,
     resumeBenchmark,
     restartBenchmark,
-    pauseModel,
-    resumeModel,
-    retryModel,
-    cancelModel,
     submitHumanCritiques,
     streamingText,
     toolActivity,
@@ -255,10 +251,6 @@ function ArenaContent() {
                       router.push(`/arena/${next.id}`);
                     }
                   }}
-                  onPauseModel={(modelId) => pauseModel(modelId)}
-                  onResumeModel={(modelId) => resumeModel(modelId)}
-                  onRetryModel={(modelId) => retryModel(modelId)}
-                  onCancelModel={(modelId) => cancelModel(modelId)}
                 />
               )}
 

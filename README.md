@@ -7,18 +7,19 @@ The app is intentionally opinionated:
 - It treats creativity as a process, not a single completion.
 - It separates domain knowledge from the scoring pipeline.
 - It keeps every run inspectable after the fact.
-- It uses local JSON storage instead of a database.
-- It is designed to be understandable, reproducible, and easy to extend.
+- It stores operational data in Convex and large artifacts in Convex file storage.
+- It is designed to be durable, replayable, and easy to extend.
 
 ## What NovelBench Does
 
 - Collects a user prompt in one of eight creative domains.
 - Runs a configurable roster of OpenRouter-backed models.
+- Optionally lets eligible stages use Exa-backed web search when project policy allows it.
 - Has each model generate a structured idea.
 - Has models critique one another anonymously.
 - Lets models revise their own ideas using the critiques they received.
 - Runs a final anonymous vote over the revised ideas.
-- Stores the full run locally for replay, archive browsing, and leaderboard aggregation.
+- Stores append-only run state, events, and artifacts for replay, archive browsing, and leaderboard aggregation.
 
 ## Why It Exists
 
@@ -56,7 +57,7 @@ Each domain has:
 1. **Generate**
    - The selected models receive the same user prompt plus the domain prompt.
    - Each model returns structured JSON for its idea.
-   - Generation is streamed so the UI can show live text as it arrives.
+   - If research is enabled for the project and the user has provided an Exa key, supported models can issue bounded web-search tool calls during idea generation.
 
 2. **Critique and rank**
    - Every model critiques the other ideas anonymously.
@@ -69,7 +70,7 @@ Each domain has:
 
 4. **Revise**
    - Each surviving model revises its own idea using the critiques it received.
-   - Revision is streamed.
+   - If research is enabled, supported models can also use Exa during revision.
    - Revised ideas are stored separately from the originals.
 
 5. **Final vote**
@@ -79,14 +80,17 @@ Each domain has:
 
 ## Core Mechanics
 
-- **OpenRouter is the only model gateway.** The app does not call providers directly.
-- **Runs are file-backed.** Each run lives in `data/runs/<run-id>.json`.
-- **The scheduler is in-process.** It queues benchmark execution, supports resumption, and keeps abort controllers per stage.
-- **Progress is pushed over SSE.** The UI listens to `/api/benchmark/[id]/events` for live status and token streams.
+- **OpenRouter is the model gateway.** Model generation, critique, revision, and voting run through user-provided OpenRouter credentials.
+- **Exa is the research gateway.** Web search is optional, policy-controlled, and uses user-provided Exa credentials.
+- **Runs are Convex-backed.** Run summaries, participants, stage state, policies, budgets, usage, and analytics live in Convex tables.
+- **Large payloads live in object storage.** Search payloads, exports, and other large artifacts are stored in Convex file storage.
+- **Execution is durable.** Convex Workflow and bounded work pools coordinate benchmark stages instead of relying on an in-process scheduler.
+- **Progress is realtime.** The UI subscribes to Convex queries for live run state instead of consuming an SSE route.
 - **Prompt generation is centralized.** Shared stage copy lives in `src/lib/prompt-copy.ts`, while the prompt builder logic lives in `src/lib/prompts.ts`.
 - **Structured output is defensive.** The app tries to recover from fenced JSON, truncated JSON, and lightly malformed model output.
 - **Anonymous labels are stable per stage.** Judges see labels like A, B, C, not model names.
-- **The leaderboard is derived data.** It is computed from stored runs, not written by hand.
+- **The leaderboard is cached derived data.** It is updated from completed runs and served from Convex read models.
+- **BYOK is enforced.** Users bring their own OpenRouter and Exa keys, which are stored encrypted server-side.
 
 ## Tech Stack
 
@@ -95,19 +99,20 @@ Each domain has:
 - TypeScript
 - Tailwind CSS v4
 - Framer Motion
+- Convex database, auth, file storage, and workflows
 - OpenRouter API
+- Exa API
 - Bun for package management and scripts
-- Local JSON files for persistence
 
 ## Repository Layout
 
 - `src/app` - routes, pages, route handlers, and loading states
 - `src/components` - page sections, widgets, result views, and UI primitives
-- `src/lib` - benchmark engine, prompts, storage, OpenRouter client, results aggregation
-- `src/hooks` - client hooks for SSE and easter eggs
+- `src/lib` - prompts, shared web-search helpers, OpenRouter client, and results aggregation
+- `src/hooks` - client hooks for Convex-backed live state and easter eggs
 - `src/types` - shared type definitions
 - `src/utils` - identity helpers and animation variants
-- `data/runs` - persisted benchmark runs
+- `convex` - backend schema, auth, queries, mutations, actions, workflows, and policy helpers
 - `docs` - prompt review and prompt-writing references
 
 ## Development Setup
@@ -120,10 +125,12 @@ Use Bun only.
 bun install
 ```
 
-2. Create your environment file from the example and add your OpenRouter key:
+2. Create your environment file from the example and add the Convex and auth settings needed for local development:
 
 ```text
-OPENROUTER_API_KEY=your_openrouter_api_key_here
+NEXT_PUBLIC_CONVEX_URL=your_convex_deployment_url
+CONVEX_DEPLOYMENT=your_convex_deployment_name
+AUTH_SECRET=your_auth_secret
 ```
 
 3. Start the dev server:
@@ -139,18 +146,23 @@ bun run dev
 - `bun run start` - run the production server
 - `bun run lint` - run lint checks
 - `bun run test` - run the Vitest suite
+- `bunx convex dev --once` - validate the Convex backend and push schema changes
 
 ## Environment
 
-The app requires:
+The app requires local Convex/auth configuration to boot the web app. Provider credentials are BYOK and are stored through the in-app settings flow instead of being shared as global server keys.
 
-- `OPENROUTER_API_KEY`
+Typical local variables include:
 
-If the key is missing, model calls fail immediately.
+- `NEXT_PUBLIC_CONVEX_URL`
+- `CONVEX_DEPLOYMENT`
+- `AUTH_SECRET`
+- OAuth provider credentials for Google and GitHub
+- Convex server-side encryption material for provider key storage
 
 ## Notes
 
-- The archive and leaderboard are driven by whatever is already in `data/runs`.
-- Legacy benchmark files can still be migrated from `data/` into `data/runs/`.
+- The archive and leaderboard are driven by Convex read models, not by scanning local files.
+- Legacy benchmark files can be imported into the Convex run/event/artifact model through a migration path.
 - The current model catalog in code is the source of truth; the README may lag if the catalog changes.
-- Prompt behavior is centralized and reviewed separately so it can be changed without rewriting the benchmark engine.
+- Prompt behavior is centralized and reviewed separately so it can be changed without rewriting the workflow.

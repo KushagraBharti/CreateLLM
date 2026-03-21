@@ -1,5 +1,5 @@
 import { NextRequest } from "next/server";
-import { addHumanCritiquesToRun } from "@/lib/run-scheduler";
+import { submitHumanCritiquesServer } from "@/lib/convex-server";
 
 export async function POST(
   request: NextRequest,
@@ -9,7 +9,7 @@ export async function POST(
   const body = await request.json();
   const critiques = Array.isArray(body.critiques) ? body.critiques : [];
 
-  const run = await addHumanCritiquesToRun(
+  const run = await submitHumanCritiquesServer(
     id,
     critiques.map((critique: Record<string, unknown>) => ({
       ideaLabel: String(critique.ideaLabel ?? "H"),

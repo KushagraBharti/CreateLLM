@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { Instrument_Serif, Figtree, IBM_Plex_Mono } from "next/font/google";
+import { ConvexAuthNextjsServerProvider } from "@convex-dev/auth/nextjs/server";
 import "./globals.css";
 import Navbar from "@/components/layout/Navbar";
 import Footer from "@/components/layout/Footer";
@@ -33,7 +34,7 @@ export const metadata: Metadata = {
     "Configurable frontier AI models compete across creative domains. They generate, critique, revise, and vote to reveal which model performs best.",
 };
 
-export default function RootLayout({
+export default async function RootLayout({
   children,
 }: Readonly<{
   children: React.ReactNode;
@@ -44,24 +45,26 @@ export default function RootLayout({
       className={`${instrumentSerif.variable} ${figtree.variable} ${ibmPlexMono.variable}`}
     >
       <body className="antialiased min-h-screen flex flex-col">
-        <EasterEggProvider>
-          <Navbar />
-          <main className="flex-1 pt-16">
-            <PageTransition>{children}</PageTransition>
-          </main>
-          <Footer />
-          <Toaster
-            theme="dark"
-            toastOptions={{
-              style: {
-                background: "#111114",
-                border: "1px solid rgba(255,255,255,0.06)",
-                color: "#E8E4DE",
-                fontFamily: "var(--font-body)",
-              },
-            }}
-          />
-        </EasterEggProvider>
+        <ConvexAuthNextjsServerProvider>
+          <EasterEggProvider>
+            <Navbar />
+            <main className="flex-1 pt-16">
+              <PageTransition>{children}</PageTransition>
+            </main>
+            <Footer />
+            <Toaster
+              theme="dark"
+              toastOptions={{
+                style: {
+                  background: "#111114",
+                  border: "1px solid rgba(255,255,255,0.06)",
+                  color: "#E8E4DE",
+                  fontFamily: "var(--font-body)",
+                },
+              }}
+            />
+          </EasterEggProvider>
+        </ConvexAuthNextjsServerProvider>
       </body>
     </html>
   );

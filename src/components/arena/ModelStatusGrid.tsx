@@ -61,33 +61,12 @@ function getModelStageStatus(
   }
 }
 
-function canControlModel(run: BenchmarkRun | null, modelId: string): boolean {
-  if (!run) return false;
-  if (!["generate", "critique", "revise", "vote"].includes(run.checkpoint.stage)) return false;
-  const state = run.modelStates[modelId];
-  if (!state || state.status === "complete" || state.status === "canceled") return false;
-
-  if (run.checkpoint.stage === "generate") return true;
-  if (run.checkpoint.stage === "critique") return run.ideas.some((idea) => idea.modelId === modelId);
-  if (run.checkpoint.stage === "revise") return run.ideas.some((idea) => idea.modelId === modelId);
-  if (run.checkpoint.stage === "vote") return run.revisedIdeas.some((idea) => idea.modelId === modelId);
-  return false;
-}
-
 export default function ModelStatusGrid({
   run,
   status,
-  onPauseModel,
-  onResumeModel,
-  onRetryModel,
-  onCancelModel,
 }: {
   run: BenchmarkRun | null;
   status: BenchmarkStatus;
-  onPauseModel?: (modelId: string) => Promise<void> | void;
-  onResumeModel?: (modelId: string) => Promise<void> | void;
-  onRetryModel?: (modelId: string) => Promise<void> | void;
-  onCancelModel?: (modelId: string) => Promise<void> | void;
 }) {
   const modelIds = run?.selectedModels.map((model) => model.id) ?? getModelOrder();
 
@@ -149,46 +128,6 @@ export default function ModelStatusGrid({
                 <p className="mt-1 text-xs leading-relaxed text-text-muted max-w-[26ch]">
                   {statusNote}
                 </p>
-              )}
-              {run && canControlModel(run, modelId) && (
-                <div className="mt-2 flex flex-wrap gap-2">
-                  {(stageStatus === "thinking" || stageStatus === "waiting" || stageStatus === "retrying") && onPauseModel && (
-                    <button
-                      type="button"
-                      onClick={() => void onPauseModel(modelId)}
-                      className="text-xs text-text-muted hover:text-text-secondary transition-colors"
-                    >
-                      Pause
-                    </button>
-                  )}
-                  {stageStatus === "paused" && onResumeModel && (
-                    <button
-                      type="button"
-                      onClick={() => void onResumeModel(modelId)}
-                      className="text-xs text-text-muted hover:text-text-secondary transition-colors"
-                    >
-                      Resume
-                    </button>
-                  )}
-                  {(stageStatus === "paused" || stageStatus === "failed") && onRetryModel && (
-                    <button
-                      type="button"
-                      onClick={() => void onRetryModel(modelId)}
-                      className="text-xs text-text-muted hover:text-text-secondary transition-colors"
-                    >
-                      Retry
-                    </button>
-                  )}
-                  {stageStatus !== "canceled" && stageStatus !== "done" && onCancelModel && (
-                    <button
-                      type="button"
-                      onClick={() => void onCancelModel(modelId)}
-                      className="text-xs text-[#C75050] hover:text-[#E26A6A] transition-colors"
-                    >
-                      Cancel
-                    </button>
-                  )}
-                </div>
               )}
             </div>
           </div>

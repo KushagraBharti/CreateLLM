@@ -1,6 +1,6 @@
 import Link from "next/link";
 import BenchmarkDetailClient from "@/components/arena/BenchmarkDetailClient";
-import { loadBenchmarkRun } from "@/lib/storage";
+import { fetchRun } from "@/lib/convex-server";
 
 export default async function BenchmarkDetailPage({
   params,
@@ -8,7 +8,7 @@ export default async function BenchmarkDetailPage({
   params: Promise<{ id: string }>;
 }) {
   const { id } = await params;
-  const run = await loadBenchmarkRun(id);
+  const run = await fetchRun(id);
 
   if (!run) {
     return (

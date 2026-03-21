@@ -5,6 +5,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { motion, AnimatePresence } from "framer-motion";
 import { clsx } from "clsx";
+import AuthControls from "@/components/auth/AuthControls";
 
 const navItems = [
   { href: "/", label: "Home" },
@@ -89,6 +90,7 @@ export default function Navbar() {
               )}
             </Link>
           ))}
+          <AuthControls />
         </div>
 
         {/* Mobile toggle */}
@@ -122,6 +124,9 @@ export default function Navbar() {
                   {item.label}
                 </Link>
               ))}
+              <div className="pt-3 border-t border-border/60">
+                <AuthControls />
+              </div>
             </div>
           </motion.div>
         )}

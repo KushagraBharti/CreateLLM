@@ -1,18 +1,9 @@
-import {
-  RetrievedSourceRecord,
-  SearchWebArgs,
-  SearchWebResultItem,
-  WebEnabledStage,
-} from "@/types";
+"use node";
+
+import type { SearchWebArgs, SearchWebResultItem } from "@/types";
+import type { SearchWebPayload } from "@/lib/benchmark-web";
 
 const EXA_SEARCH_API_URL = "https://api.exa.ai/search";
-
-export const DEFAULT_WEB_SEARCH_CONFIG = {
-  maxSearchCallsPerStagePerModel: 2,
-  maxResultsPerSearch: 3,
-  maxCharsPerResult: 20_000,
-  maxLoopTurns: 6,
-} as const;
 
 interface ExaSearchResult {
   title?: string;
@@ -26,14 +17,12 @@ interface ExaSearchResponse {
   results?: ExaSearchResult[];
 }
 
-export interface SearchWebPayload {
-  query: string;
-  results: SearchWebResultItem[];
-}
-
-function clampMaxResults(value: number | undefined): number {
-  const desired = typeof value === "number" && Number.isFinite(value) ? Math.round(value) : DEFAULT_WEB_SEARCH_CONFIG.maxResultsPerSearch;
-  return Math.max(1, Math.min(DEFAULT_WEB_SEARCH_CONFIG.maxResultsPerSearch, desired));
+function clampMaxResults(value: number | undefined, defaultMax: number): number {
+  const desired =
+    typeof value === "number" && Number.isFinite(value)
+      ? Math.round(value)
+      : defaultMax;
+  return Math.max(1, Math.min(defaultMax, desired));
 }
 
 function sanitizeQuery(query: string): string {
@@ -48,19 +37,23 @@ function domainFromUrl(url: string): string {
   }
 }
 
-function trimText(value: string | undefined, maxChars: number): { text: string; truncated: boolean } {
+function trimText(value: string | undefined, maxChars: number) {
   const normalized = (value ?? "").trim();
   if (normalized.length <= maxChars) {
     return { text: normalized, truncated: false };
   }
 
   return {
-    text: `${normalized.slice(0, Math.max(0, maxChars - 1)).trimEnd()}…`,
+    text: `${normalized.slice(0, Math.max(0, maxChars - 1)).trimEnd()}...`,
     truncated: true,
   };
 }
 
-function normalizeResult(result: ExaSearchResult, index: number, maxChars: number): SearchWebResultItem {
+function normalizeResult(
+  result: ExaSearchResult,
+  index: number,
+  maxChars: number,
+): SearchWebResultItem {
   const text = trimText(result.text, maxChars);
   const snippet = text.text.slice(0, 320);
 
@@ -78,7 +71,7 @@ function normalizeResult(result: ExaSearchResult, index: number, maxChars: numbe
 }
 
 function mapCategoryHintToExaCategory(
-  hint: SearchWebArgs["categoryHint"]
+  hint: SearchWebArgs["categoryHint"],
 ): "news" | "research paper" | "company" | "financial report" | undefined {
   switch (hint) {
     case "news":
@@ -94,7 +87,11 @@ function mapCategoryHintToExaCategory(
   }
 }
 
-function buildExaSearchBody(args: SearchWebArgs, maxResults: number, maxChars: number): Record<string, unknown> {
+function buildExaSearchBody(
+  args: SearchWebArgs,
+  maxResults: number,
+  maxChars: number,
+): Record<string, unknown> {
   const category = mapCategoryHintToExaCategory(args.categoryHint);
   const body: Record<string, unknown> = {
     query: sanitizeQuery(args.query),
@@ -128,33 +125,32 @@ function buildExaSearchBody(args: SearchWebArgs, maxResults: number, maxChars: n
     Number.isFinite(args.freshnessDays) &&
     args.freshnessDays > 0
   ) {
-    const startDate = new Date(Date.now() - args.freshnessDays * 24 * 60 * 60 * 1000).toISOString();
-    body.startPublishedDate = startDate;
+    body.startPublishedDate = new Date(
+      Date.now() - args.freshnessDays * 24 * 60 * 60 * 1000,
+    ).toISOString();
   }
 
   return body;
 }
 
-export async function searchWebWithExa(
+export async function searchWebWithExaKey(
+  apiKey: string,
   args: SearchWebArgs,
   options: {
     signal?: AbortSignal;
     maxResults?: number;
     maxCharsPerResult?: number;
-  } = {}
+    defaultMaxResults: number;
+    defaultMaxCharsPerResult: number;
+  },
 ): Promise<SearchWebPayload> {
-  const apiKey = process.env.EXA_API_KEY;
-  if (!apiKey) {
-    throw new Error("EXA_API_KEY is not set in environment variables");
-  }
-
   const query = sanitizeQuery(args.query);
   if (!query) {
     throw new Error("search_web requires a non-empty query");
   }
 
-  const maxResults = clampMaxResults(options.maxResults);
-  const maxChars = Math.max(400, options.maxCharsPerResult ?? DEFAULT_WEB_SEARCH_CONFIG.maxCharsPerResult);
+  const maxResults = clampMaxResults(options.maxResults, options.defaultMaxResults);
+  const maxChars = Math.max(400, options.maxCharsPerResult ?? options.defaultMaxCharsPerResult);
   const body = buildExaSearchBody({ ...args, query }, maxResults, maxChars);
 
   const response = await fetch(EXA_SEARCH_API_URL, {
@@ -182,42 +178,4 @@ export async function searchWebWithExa(
     query,
     results,
   };
-}
-
-export function sourceRecordFromResult(
-  runId: string,
-  modelId: string,
-  stage: WebEnabledStage,
-  query: string,
-  result: SearchWebResultItem
-): RetrievedSourceRecord {
-  const retrievedAt = new Date().toISOString();
-  return {
-    id: `${runId}_${stage}_${modelId}_${crypto.randomUUID()}`,
-    stage,
-    modelId,
-    query,
-    url: result.url,
-    title: result.title,
-    domain: result.domain,
-    publishedDate: result.publishedDate,
-    snippet: result.snippet,
-    contentPreview: result.contentPreview,
-    truncated: result.truncated,
-    retrievedAt,
-  };
-}
-
-export function formatPriorSourceSummary(records: RetrievedSourceRecord[]): string {
-  if (records.length === 0) return "";
-
-  return records
-    .map((record, index) => {
-      const snippet = record.snippet || record.contentPreview.slice(0, 220);
-      return `${index + 1}. ${record.title || record.url}
-URL: ${record.url}
-Domain: ${record.domain || "unknown"}
-Snippet: ${snippet}`.trim();
-    })
-    .join("\n\n");
 }

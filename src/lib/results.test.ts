@@ -1,18 +1,18 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { BenchmarkRun } from "@/types";
 
-const listRuns = vi.fn();
-const listSummaries = vi.fn();
+const fetchLeaderboard = vi.fn();
+const fetchArchive = vi.fn();
 
-vi.mock("@/lib/storage", () => ({
-  listBenchmarkRuns: listRuns,
-  listBenchmarkRunSummaries: listSummaries,
+vi.mock("@/lib/convex-server", () => ({
+  fetchArchiveSummaries: fetchArchive,
+  fetchLeaderboardData: fetchLeaderboard,
 }));
 
 describe("results loaders", () => {
   beforeEach(() => {
-    listRuns.mockReset();
-    listSummaries.mockReset();
+    fetchLeaderboard.mockReset();
+    fetchArchive.mockReset();
   });
 
   it("computes totals from actual run data", async () => {
@@ -79,8 +79,7 @@ describe("results loaders", () => {
       metadata: { participantCount: 2, minimumSuccessfulModels: 2 },
     };
 
-    listRuns.mockResolvedValue([run]);
-    listSummaries.mockResolvedValue([
+    fetchArchive.mockResolvedValue([
       {
         id: run.id,
         categoryId: run.categoryId,
@@ -93,6 +92,27 @@ describe("results loaders", () => {
         failedModelCount: 0,
       },
     ]);
+    fetchLeaderboard.mockResolvedValue({
+      global: [
+        {
+          modelId: "b",
+          modelName: "B",
+          appearances: 1,
+          wins: 1,
+          averageRank: 1,
+          averageScore: 9,
+          categoriesWon: ["venture"],
+        },
+      ],
+      byCategory: {
+        venture: [],
+      },
+      totals: {
+        ideas: 4,
+        critiques: 1,
+        runs: 1,
+      },
+    });
 
     const { getHomeStats, getLeaderboardData } = await import("@/lib/results");
     const leaderboard = await getLeaderboardData();

@@ -2,12 +2,15 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { motion } from "framer-motion";
-import { BenchmarkRun } from "@/types";
+import { useConvexAuth, useMutation, useQuery } from "convex/react";
+import { BenchmarkRun, RunExportEntry } from "@/types";
 import { LiveReasoningActivity, LiveToolActivity } from "@/hooks/useBenchmarkSSE";
+import { api } from "../../../convex/_generated/api";
 import { getModelName } from "@/lib/models";
 import { getModelIdentity, getModelOrder } from "@/utils/model-identity";
 import Tabs, { TabItem } from "@/components/ui/Tabs";
 import Badge from "@/components/ui/Badge";
+import Button from "@/components/ui/Button";
 import IdeaCard from "./IdeaCard";
 import CritiqueCard from "./CritiqueCard";
 import RankingDisplay from "./RankingDisplay";
@@ -30,10 +33,20 @@ export default function ResultsView({
   toolActivity = {},
   reasoningActivity = {},
 }: ResultsViewProps) {
+  const { isAuthenticated } = useConvexAuth();
+  const requestRunExport = useMutation(api.exports.requestRunExport);
+  const runExports = useQuery(
+    api.exports.listByRun,
+    isAuthenticated ? { runId: run.id as never } : "skip"
+  );
   const [activeTab, setActiveTab] = useState("ideas");
   const [critiqueFilter, setCritiqueFilter] = useState<string | null>(null);
+  const [exportMessage, setExportMessage] = useState<string | null>(null);
   const prevStatusRef = useRef<string | null>(null);
   const visibleModelOrder = getModelOrder(run.selectedModels.map((model) => model.id));
+  const completedRunExports = ((runExports ?? []) as RunExportEntry[]).filter(
+    (entry) => entry.status === "complete" && entry.downloadUrl,
+  );
 
   useEffect(() => {
     if (!isLive) return;
@@ -65,7 +78,11 @@ export default function ResultsView({
     for (const critique of run.humanCritiques) ids.add(critique.targetModelId);
     return Array.from(ids);
   }, [run.critiqueVotes, run.humanCritiques]);
-  const hasSearchActivity = run.web.toolCalls.length > 0 || Object.keys(toolActivity).length > 0;
+  const hasSearchActivity =
+    run.web.toolCalls.length > 0 ||
+    run.web.retrievedSources.length > 0 ||
+    run.web.usage.length > 0 ||
+    Object.keys(toolActivity).length > 0;
   const liveSearchEntries = Object.values(toolActivity);
   const liveReasoningEntries = Object.values(reasoningActivity);
   const failedModelDetails = useMemo(() => {
@@ -251,6 +268,50 @@ export default function ResultsView({
         <p className="font-mono text-base text-text-muted mt-1">
           {new Date(run.timestamp).toLocaleString()}
         </p>
+        {isAuthenticated && (
+          <div className="mt-4 flex flex-wrap items-center gap-3">
+            <Button
+              type="button"
+              variant="ghost"
+              onClick={() => {
+                setExportMessage("Queueing JSON export...");
+                void requestRunExport({ runId: run.id as never, format: "json" })
+                  .then(() => setExportMessage("JSON export queued."))
+                  .catch((error) =>
+                    setExportMessage(error instanceof Error ? error.message : "Failed to queue export.")
+                  );
+              }}
+            >
+              Export JSON
+            </Button>
+            <Button
+              type="button"
+              variant="ghost"
+              onClick={() => {
+                setExportMessage("Queueing CSV export...");
+                void requestRunExport({ runId: run.id as never, format: "csv" })
+                  .then(() => setExportMessage("CSV export queued."))
+                  .catch((error) =>
+                    setExportMessage(error instanceof Error ? error.message : "Failed to queue export.")
+                  );
+              }}
+            >
+              Export CSV
+            </Button>
+            {completedRunExports.map((entry) => (
+              <a
+                key={entry.id}
+                href={entry.downloadUrl ?? "#"}
+                target="_blank"
+                rel="noreferrer"
+                className="text-sm text-text-muted hover:text-text-primary transition-colors"
+              >
+                Download {entry.format.toUpperCase()}
+              </a>
+            ))}
+          </div>
+        )}
+        {exportMessage && <p className="mt-2 text-sm text-text-muted">{exportMessage}</p>}
       </div>
 
       <Tabs tabs={tabs} activeTab={activeTab} onTabChange={setActiveTab}>

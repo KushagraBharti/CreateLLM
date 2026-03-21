@@ -1,12 +1,12 @@
 import { NextRequest } from "next/server";
-import { loadBenchmarkRun } from "@/lib/storage";
+import { fetchRun } from "@/lib/convex-server";
 
 export async function GET(
   _request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
   const { id } = await params;
-  const run = await loadBenchmarkRun(id);
+  const run = await fetchRun(id);
 
   if (!run) {
     return Response.json({ error: "Benchmark run not found" }, { status: 404 });
