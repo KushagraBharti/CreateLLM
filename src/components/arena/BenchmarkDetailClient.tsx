@@ -37,15 +37,15 @@ export default function BenchmarkDetailClient({
 
   return (
     <div className="max-w-5xl mx-auto px-6 py-8">
-      <div className="flex items-center gap-4 mb-8">
+      <div className="flex items-center gap-3 mb-8">
         <Link
           href="/archive"
-          className="text-sm text-text-muted hover:text-text-secondary transition-colors"
+          className="text-sm text-text-muted hover:text-accent transition-colors"
         >
           &larr; Archive
         </Link>
-        <span className="text-border">/</span>
-        <span className="font-mono text-[11px] uppercase tracking-[0.2em] text-text-muted">
+        <span className="text-border/40">/</span>
+        <span className="font-mono text-[11px] uppercase tracking-[0.2em] text-accent/70">
           {activeRun.status.replaceAll("_", " ")}
         </span>
       </div>

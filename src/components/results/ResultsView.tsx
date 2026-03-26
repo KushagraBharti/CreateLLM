@@ -259,9 +259,10 @@ export default function ResultsView({
         <div className="flex items-start justify-between gap-4">
           <div className="min-w-0 flex-1">
             <div className="flex items-center gap-3 mb-2">
-              <span className="label capitalize">{run.categoryId}</span>
+              <span className="font-mono text-[11px] uppercase tracking-[0.2em] text-accent capitalize">{run.categoryId}</span>
               {isLive && run.status !== "complete" && run.status !== "partial" && (
-                <span className="font-mono text-[11px] uppercase tracking-[0.2em] text-[#6BBF7B]">
+                <span className="font-mono text-[11px] uppercase tracking-[0.2em] text-[#6BBF7B] flex items-center gap-1.5">
+                  <span className="w-1.5 h-1.5 rounded-full bg-[#6BBF7B] inline-block" style={{ animation: "pulse-dot 1.5s ease-in-out infinite" }} />
                   Live
                 </span>
               )}
@@ -273,7 +274,7 @@ export default function ResultsView({
             </div>
             <p className="text-text-primary text-base leading-relaxed">{run.prompt}</p>
           </div>
-          <span className="font-mono text-[11px] text-text-muted/60 shrink-0 mt-1">
+          <span className="font-mono text-[11px] text-text-muted/40 shrink-0 mt-1">
             {new Date(run.timestamp).toLocaleDateString()}
           </span>
         </div>

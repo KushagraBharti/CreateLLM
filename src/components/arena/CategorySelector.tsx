@@ -1,6 +1,5 @@
 "use client";
 
-import { motion } from "framer-motion";
 import { categories } from "@/lib/categories";
 import { clsx } from "clsx";
 
@@ -27,22 +26,27 @@ export default function CategorySelector({
               onClick={() => !disabled && onSelect(cat.id)}
               disabled={disabled}
               className={clsx(
-                "text-left px-4 py-3 border-r border-b border-border transition-colors",
+                "text-left px-4 py-3.5 border-r border-b border-border transition-all duration-200",
                 "disabled:opacity-30 disabled:cursor-not-allowed",
                 selected
-                  ? "bg-white/[0.03]"
-                  : "hover:bg-white/[0.02]",
+                  ? "bg-accent/[0.06] border-b-accent/40"
+                  : "hover:bg-white/[0.03]",
               )}
             >
               <span
                 className={clsx(
-                  "text-base block transition-colors",
-                  selected ? "text-text-primary" : "text-text-muted",
+                  "text-base block font-medium transition-colors",
+                  selected ? "text-accent" : "text-text-secondary hover:text-text-primary",
                 )}
               >
                 {cat.name}
               </span>
-              <span className="text-[11px] text-text-muted/40 leading-snug mt-1 block line-clamp-2">
+              <span
+                className={clsx(
+                  "text-xs leading-snug mt-1 block line-clamp-2 transition-colors",
+                  selected ? "text-text-secondary" : "text-text-muted",
+                )}
+              >
                 {cat.description}
               </span>
             </button>

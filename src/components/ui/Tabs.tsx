@@ -58,7 +58,7 @@ export default function Tabs({ tabs, activeTab, onTabChange, children }: TabsPro
           >
             {tab.label}
             {tab.count !== undefined && tab.count > 0 && (
-              <span className="font-mono text-base text-text-muted ml-1.5">
+              <span className="font-mono text-[11px] text-accent/60 ml-1.5">
                 {tab.count}
               </span>
             )}
@@ -67,7 +67,7 @@ export default function Tabs({ tabs, activeTab, onTabChange, children }: TabsPro
 
         {/* Animated underline */}
         <motion.div
-          className="absolute bottom-0 h-px bg-text-primary"
+          className="absolute bottom-0 h-[2px] bg-accent"
           animate={{ left: indicatorStyle.left, width: indicatorStyle.width }}
           transition={{ type: "spring", stiffness: 400, damping: 30 }}
         />

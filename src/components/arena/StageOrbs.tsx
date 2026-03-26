@@ -4,11 +4,11 @@ import { motion } from "framer-motion";
 import { BenchmarkStatus, RunCheckpointStage } from "@/types";
 import { clsx } from "clsx";
 
-const stages: { status: BenchmarkStatus; label: string; number: string }[] = [
-  { status: "generating", label: "Generate", number: "01" },
-  { status: "critiquing", label: "Critique", number: "02" },
-  { status: "revising", label: "Revise", number: "03" },
-  { status: "voting", label: "Crown", number: "04" },
+const stages: { status: BenchmarkStatus; label: string; number: string; color: string }[] = [
+  { status: "generating", label: "Generate", number: "01", color: "#7AA2F7" },
+  { status: "critiquing", label: "Critique", number: "02", color: "#C9A84C" },
+  { status: "revising", label: "Revise", number: "03", color: "#BB9AF7" },
+  { status: "voting", label: "Crown", number: "04", color: "#D4634A" },
 ];
 
 function getStageIndex(status: BenchmarkStatus): number {
@@ -59,14 +59,14 @@ export default function StageOrbs({
 
         return (
           <div key={stage.status} className="relative">
-            {/* Top progress line */}
-            <div className="h-px w-full bg-border/40 mb-4">
+            {/* Top progress line — colored per stage */}
+            <div className="h-[2px] w-full bg-border/20 mb-4">
               {(isComplete || isCurrent) && (
                 <motion.div
-                  className={clsx("h-full", isComplete ? "bg-accent/60" : "bg-text-primary")}
+                  className="h-full"
                   initial={{ scaleX: 0 }}
                   animate={{ scaleX: 1 }}
-                  style={{ transformOrigin: "left" }}
+                  style={{ transformOrigin: "left", backgroundColor: stage.color, opacity: isComplete ? 0.5 : 1 }}
                   transition={{ duration: 0.5, delay: i * 0.1, ease: "easeOut" }}
                 />
               )}
@@ -74,22 +74,30 @@ export default function StageOrbs({
 
             <div className="pr-4">
               <span
-                className={clsx(
-                  "font-mono text-[11px] tracking-[0.2em] transition-colors duration-300",
-                  isComplete && "text-accent/60",
-                  isCurrent && "text-text-primary",
-                  !isComplete && !isCurrent && "text-text-muted/25",
-                )}
+                className="font-mono text-[11px] tracking-[0.2em] transition-colors duration-300"
+                style={{
+                  color: isComplete
+                    ? `${stage.color}99`
+                    : isCurrent
+                      ? stage.color
+                      : "var(--color-text-muted)",
+                  opacity: !isComplete && !isCurrent ? 0.25 : 1,
+                }}
               >
                 {stage.number}
               </span>
               <p
                 className={clsx(
                   "text-base mt-1 transition-colors duration-300",
-                  isComplete && "text-text-secondary",
-                  isCurrent && "text-text-primary font-medium",
                   !isComplete && !isCurrent && "text-text-muted/30",
                 )}
+                style={
+                  isCurrent
+                    ? { color: stage.color, fontWeight: 500 }
+                    : isComplete
+                      ? { color: "var(--color-text-secondary)" }
+                      : undefined
+                }
               >
                 {stage.label}
               </p>

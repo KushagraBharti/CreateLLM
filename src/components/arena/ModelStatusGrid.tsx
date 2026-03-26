@@ -62,6 +62,17 @@ function getModelStageStatus(
   }
 }
 
+function getStatusColor(stageStatus: string): string {
+  switch (stageStatus) {
+    case "done": return "#6BBF7B";
+    case "paused": return "#C9A84C";
+    case "retrying": return "#7AA2F7";
+    case "failed": return "#C75050";
+    case "canceled": return "#8A8A8A";
+    default: return "";
+  }
+}
+
 const statusLabels: Record<string, string> = {
   done: "Done",
   paused: "Paused",
@@ -92,18 +103,37 @@ export default function ModelStatusGrid({
           stageStatus === "failed"
             ? modelState?.error
             : controlState?.note;
+        const statusColor = getStatusColor(stageStatus);
+        const isActive = stageStatus === "thinking";
 
         return (
           <div
             key={modelId}
-            className="flex items-center gap-4 py-3 border-b border-border/40"
+            className="flex items-center gap-4 py-3 border-b border-border/40 group"
           >
+            {/* Left color indicator */}
+            <span
+              className="w-1 h-5 shrink-0 rounded-full transition-all duration-300"
+              style={{
+                backgroundColor: isActive
+                  ? model.color
+                  : statusColor || "var(--color-border)",
+                opacity: stageStatus === "waiting" ? 0.2 : 0.8,
+                ...(isActive
+                  ? { animation: "pulse-dot 1.5s ease-in-out infinite", boxShadow: `0 0 6px ${model.color}40` }
+                  : {}),
+              }}
+            />
+
             {/* Model name */}
             <div className="min-w-0 flex-1">
-              <span className="text-base text-text-primary">
+              <span
+                className="text-base transition-colors"
+                style={{ color: isActive ? model.color : "var(--color-text-primary)" }}
+              >
                 {model.name}
               </span>
-              <span className="text-sm text-text-muted ml-2 hidden sm:inline">
+              <span className="text-sm text-text-muted/50 ml-2 hidden sm:inline">
                 {model.provider}
               </span>
             </div>
@@ -117,17 +147,11 @@ export default function ModelStatusGrid({
 
             {/* Status */}
             <span
-              className={clsx(
-                "font-mono text-[11px] uppercase tracking-[0.2em] shrink-0",
-                stageStatus === "done" && "text-[#6BBF7B]",
-                stageStatus === "thinking" && "text-text-secondary",
-                stageStatus === "waiting" && "text-text-muted/40",
-                stageStatus === "paused" && "text-[#C9A84C]",
-                stageStatus === "retrying" && "text-[#7AA2F7]",
-                stageStatus === "failed" && "text-[#C75050]",
-                stageStatus === "canceled" && "text-text-muted",
-              )}
-              style={stageStatus === "thinking" ? { animation: "pulse-dot 1.5s ease-in-out infinite" } : undefined}
+              className="font-mono text-[11px] uppercase tracking-[0.2em] shrink-0 transition-colors"
+              style={{
+                color: statusColor || (isActive ? model.color : "var(--color-text-muted)"),
+                opacity: stageStatus === "waiting" ? 0.35 : 1,
+              }}
             >
               {statusLabels[stageStatus]}
             </span>

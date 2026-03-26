@@ -37,11 +37,18 @@ export default function IdeaCard({ idea, label, categoryId }: IdeaCardProps) {
       animate={{ opacity: 1, y: 0 }}
       className="border-b border-border pb-6 last:border-0"
     >
-      {/* Header */}
+      {/* Header with model color accent */}
       <div className="flex items-center gap-3 mb-3">
+        <span
+          className="w-1 h-4 rounded-full shrink-0"
+          style={{ backgroundColor: model.color }}
+        />
         <span className="text-base font-medium text-text-primary">{model.name}</span>
         {label && (
-          <span className="font-mono text-[11px] uppercase tracking-[0.2em] text-text-muted">
+          <span
+            className="font-mono text-[11px] uppercase tracking-[0.2em]"
+            style={{ color: label === "Revised" ? "#BB9AF7" : "var(--color-text-muted)" }}
+          >
             {label}
           </span>
         )}
@@ -57,7 +64,7 @@ export default function IdeaCard({ idea, label, categoryId }: IdeaCardProps) {
       {/* Summary */}
       {idea.content.summary && (
         <div className="mb-4">
-          <span className="label block mb-0.5">{summaryLabel}</span>
+          <span className="label block mb-0.5" style={{ color: `${model.color}88` }}>{summaryLabel}</span>
           <p className="text-base text-text-secondary italic leading-relaxed">
             {idea.content.summary}
           </p>
@@ -79,7 +86,8 @@ export default function IdeaCard({ idea, label, categoryId }: IdeaCardProps) {
       {hasMore && (
         <button
           onClick={() => setExpanded(!expanded)}
-          className="mt-3 text-base text-text-muted hover:text-text-secondary transition-colors"
+          className="mt-3 text-sm transition-colors hover:text-text-primary"
+          style={{ color: `${model.color}99` }}
         >
           {expanded ? "Show less" : `+ ${fields.length - 2} more fields`}
         </button>
