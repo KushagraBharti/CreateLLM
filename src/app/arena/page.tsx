@@ -179,40 +179,38 @@ function ArenaContent() {
         {!showRunWorkspace ? (
           <motion.div key="form" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
             <form onSubmit={handleSubmit}>
-              <div className="relative border border-border overflow-hidden">
-                <div className="absolute top-0 inset-x-0 h-px bg-gradient-to-r from-transparent via-accent/20 to-transparent" />
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-0">
+                {/* Left: Domain + Prompt */}
+                <div className="space-y-8 pb-8 lg:pb-0 lg:pr-10 lg:border-r border-border">
+                  <CategorySelector selectedId={categoryId} onSelect={setCategoryId} disabled={isRunning} />
+                  <PromptInput
+                    value={prompt}
+                    onChange={setPrompt}
+                    categoryId={categoryId}
+                    disabled={isRunning}
+                    onQuickRun={handleQuickRun}
+                  />
+                </div>
 
-                <div className="grid grid-cols-1 lg:grid-cols-2">
-                  {/* Left: Domain + Prompt */}
-                  <div className="p-6 lg:p-8 space-y-6 border-b lg:border-b-0 lg:border-r border-border">
-                    <CategorySelector selectedId={categoryId} onSelect={setCategoryId} disabled={isRunning} />
-                    <PromptInput
-                      value={prompt}
-                      onChange={setPrompt}
-                      categoryId={categoryId}
-                      disabled={isRunning}
-                      onQuickRun={handleQuickRun}
-                    />
-                  </div>
-
-                  {/* Right: Models */}
-                  <div className="p-6 lg:p-8 flex flex-col min-h-0">
-                    <ModelSelector
-                      selectedModelIds={selectionState.selectedModelIds}
-                      customModelIds={selectionState.customModelIds}
-                      onChange={({ selectedModelIds: nextSelected, customModelIds: nextCustom }) => {
-                        setSelectedModelIds(nextSelected);
-                        setCustomModelIds(nextCustom);
-                      }}
-                      disabled={isRunning}
-                    />
-                  </div>
+                {/* Right: Models */}
+                <div className="pt-8 lg:pt-0 lg:pl-10 border-t lg:border-t-0 flex flex-col min-h-0">
+                  <ModelSelector
+                    selectedModelIds={selectionState.selectedModelIds}
+                    customModelIds={selectionState.customModelIds}
+                    onChange={({ selectedModelIds: nextSelected, customModelIds: nextCustom }) => {
+                      setSelectedModelIds(nextSelected);
+                      setCustomModelIds(nextCustom);
+                    }}
+                    disabled={isRunning}
+                  />
                 </div>
               </div>
 
-              <Button type="submit" size="lg" disabled={!canStart} className="w-full mt-5">
-                Enter the Arena
-              </Button>
+              <div className="mt-10 border-t border-border pt-6">
+                <Button type="submit" size="lg" disabled={!canStart} className="w-full">
+                  Enter the Arena
+                </Button>
+              </div>
             </form>
           </motion.div>
         ) : (

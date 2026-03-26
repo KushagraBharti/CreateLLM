@@ -26,7 +26,6 @@ export default function PromptInput({
   const category = categories.find((c) => c.id === categoryId);
   const examples = category?.examplePrompts ?? [];
 
-  // Typewriter placeholder
   useEffect(() => {
     if (examples.length === 0 || value) return;
     const target = examples[placeholderIndex];
@@ -72,7 +71,7 @@ export default function PromptInput({
           rows={4}
           placeholder={value ? "" : displayedPlaceholder}
           className={clsx(
-            "w-full px-4 py-3 bg-bg-surface border border-border rounded-lg text-text-primary text-base",
+            "w-full px-4 py-3 bg-transparent border border-border text-text-primary text-base",
             "placeholder:text-text-muted/30 resize-y min-h-[100px]",
             "focus:outline-none focus:border-border-active transition-colors duration-200",
             "disabled:opacity-30 disabled:cursor-not-allowed",
@@ -80,7 +79,6 @@ export default function PromptInput({
           )}
         />
 
-        {/* Cursor */}
         {!value && isTyping && (
           <span
             className="absolute pointer-events-none text-text-muted/30 text-base"
@@ -94,27 +92,24 @@ export default function PromptInput({
           </span>
         )}
 
-        <span className="absolute bottom-2 right-3 font-mono text-base text-text-muted/30">
+        <span className="absolute bottom-2 right-3 font-mono text-sm text-text-muted/20">
           {value.length}
         </span>
       </div>
 
-      {/* Quick start examples */}
       {examples.length > 0 && (
-        <div className="mt-3">
-          <p className="label mb-2">Quick start</p>
-          <div className="space-y-1">
-            {examples.map((example, i) => (
-              <button
-                key={i}
-                onClick={() => !disabled && onQuickRun(example)}
-                disabled={disabled}
-                className="w-full text-left text-base px-3 py-2.5 text-text-muted hover:text-text-secondary border-b border-border/50 last:border-0 transition-colors disabled:opacity-30 truncate"
-              >
-                {example}
-              </button>
-            ))}
-          </div>
+        <div className="mt-6 border-t border-border pt-4">
+          <p className="label mb-3">Quick Start</p>
+          {examples.map((example, i) => (
+            <button
+              key={i}
+              onClick={() => !disabled && onQuickRun(example)}
+              disabled={disabled}
+              className="w-full text-left text-sm px-0 py-2.5 text-text-muted hover:text-text-secondary border-b border-border/30 last:border-0 transition-colors disabled:opacity-30 truncate"
+            >
+              {example}
+            </button>
+          ))}
         </div>
       )}
     </div>

@@ -2,7 +2,6 @@
 
 import { motion } from "framer-motion";
 import { categories } from "@/lib/categories";
-import { getCategoryIdentity } from "@/utils/category-identity";
 import { clsx } from "clsx";
 
 interface CategorySelectorProps {
@@ -18,35 +17,23 @@ export default function CategorySelector({
 }: CategorySelectorProps) {
   return (
     <div>
-      <p className="label mb-3">Domain</p>
-      <div className="grid grid-cols-2 gap-0 border border-border rounded-lg overflow-hidden">
-        {categories.map((cat) => {
-          const identity = getCategoryIdentity(cat.id);
-          const isSelected = cat.id === selectedId;
-
-          return (
-            <button
-              key={cat.id}
-              onClick={() => !disabled && onSelect(cat.id)}
-              disabled={disabled}
-              className={clsx(
-                "relative px-4 py-3 text-left text-base transition-colors duration-150 border-b border-r border-border",
-                "disabled:opacity-30 disabled:cursor-not-allowed",
-                isSelected
-                  ? "bg-bg-elevated text-text-primary"
-                  : "bg-transparent text-text-muted hover:text-text-secondary hover:bg-bg-surface"
-              )}
-            >
-              <div className="flex items-center gap-2">
-                <span
-                  className="w-1 h-1 rounded-full flex-shrink-0"
-                  style={{ backgroundColor: isSelected ? identity.color : "transparent" }}
-                />
-                <span className="font-medium truncate">{cat.name}</span>
-              </div>
-            </button>
-          );
-        })}
+      <p className="label mb-4">Domain</p>
+      <div className="flex flex-wrap gap-x-5 gap-y-2">
+        {categories.map((cat) => (
+          <button
+            key={cat.id}
+            onClick={() => !disabled && onSelect(cat.id)}
+            disabled={disabled}
+            className={clsx(
+              "text-base transition-colors disabled:opacity-30 disabled:cursor-not-allowed",
+              cat.id === selectedId
+                ? "text-text-primary"
+                : "text-text-muted hover:text-text-secondary",
+            )}
+          >
+            {cat.name}
+          </button>
+        ))}
       </div>
 
       {selectedId && (
@@ -54,7 +41,7 @@ export default function CategorySelector({
           key={selectedId}
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
-          className="text-base text-text-muted mt-3 leading-relaxed"
+          className="text-sm text-text-muted mt-4 leading-relaxed"
         >
           {categories.find((c) => c.id === selectedId)?.description}
         </motion.p>
