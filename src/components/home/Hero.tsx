@@ -7,13 +7,6 @@ import AuthAwareLink from "@/components/auth/AuthAwareLink";
 export default function Hero() {
   return (
     <section className="relative min-h-[85vh] flex items-end pb-24 overflow-hidden">
-      {/* Subtle radial glow — barely perceptible warmth */}
-      <div
-        className="absolute top-0 right-0 w-[800px] h-[800px] pointer-events-none opacity-[0.035]"
-        style={{
-          background: "radial-gradient(circle at 70% 30%, #D4634A, transparent 60%)",
-        }}
-      />
 
       <div className="relative z-10 max-w-6xl mx-auto px-6 w-full">
         <div className="max-w-3xl">
