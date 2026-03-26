@@ -98,18 +98,20 @@ export default function PromptInput({
       </div>
 
       {examples.length > 0 && (
-        <div className="mt-6 border-t border-border pt-4">
-          <p className="label mb-3">Quick Start</p>
-          {examples.map((example, i) => (
-            <button
-              key={i}
-              onClick={() => !disabled && onQuickRun(example)}
-              disabled={disabled}
-              className="w-full text-left text-sm px-0 py-2.5 text-text-muted hover:text-text-secondary border-b border-border/30 last:border-0 transition-colors disabled:opacity-30 truncate"
-            >
-              {example}
-            </button>
-          ))}
+        <div className="mt-8">
+          <p className="label mb-4">Quick Start</p>
+          <div className="grid gap-3">
+            {examples.map((example, i) => (
+              <button
+                key={i}
+                onClick={() => !disabled && onQuickRun(example)}
+                disabled={disabled}
+                className="w-full text-left text-base px-4 py-3 border border-border text-text-secondary hover:text-text-primary hover:border-border-active hover:bg-white/[0.02] transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+              >
+                {example}
+              </button>
+            ))}
+          </div>
         </div>
       )}
     </div>

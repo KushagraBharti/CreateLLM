@@ -18,34 +18,37 @@ export default function CategorySelector({
   return (
     <div>
       <p className="label mb-4">Domain</p>
-      <div className="flex flex-wrap gap-x-5 gap-y-2">
-        {categories.map((cat) => (
-          <button
-            key={cat.id}
-            onClick={() => !disabled && onSelect(cat.id)}
-            disabled={disabled}
-            className={clsx(
-              "text-base transition-colors disabled:opacity-30 disabled:cursor-not-allowed",
-              cat.id === selectedId
-                ? "text-text-primary"
-                : "text-text-muted hover:text-text-secondary",
-            )}
-          >
-            {cat.name}
-          </button>
-        ))}
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-0 border-t border-l border-border">
+        {categories.map((cat) => {
+          const selected = cat.id === selectedId;
+          return (
+            <button
+              key={cat.id}
+              onClick={() => !disabled && onSelect(cat.id)}
+              disabled={disabled}
+              className={clsx(
+                "text-left px-4 py-3 border-r border-b border-border transition-colors",
+                "disabled:opacity-30 disabled:cursor-not-allowed",
+                selected
+                  ? "bg-white/[0.03]"
+                  : "hover:bg-white/[0.02]",
+              )}
+            >
+              <span
+                className={clsx(
+                  "text-base block transition-colors",
+                  selected ? "text-text-primary" : "text-text-muted",
+                )}
+              >
+                {cat.name}
+              </span>
+              <span className="text-[11px] text-text-muted/40 leading-snug mt-1 block line-clamp-2">
+                {cat.description}
+              </span>
+            </button>
+          );
+        })}
       </div>
-
-      {selectedId && (
-        <motion.p
-          key={selectedId}
-          initial={{ opacity: 0 }}
-          animate={{ opacity: 1 }}
-          className="text-sm text-text-muted mt-4 leading-relaxed"
-        >
-          {categories.find((c) => c.id === selectedId)?.description}
-        </motion.p>
-      )}
     </div>
   );
 }
