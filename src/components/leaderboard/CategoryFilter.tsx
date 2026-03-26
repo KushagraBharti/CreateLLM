@@ -1,6 +1,6 @@
 "use client";
 
-import { getCategoryIdentity } from "@/utils/category-identity";
+import { clsx } from "clsx";
 
 interface CategoryFilterProps {
   categories: string[];
@@ -18,39 +18,33 @@ export default function CategoryFilter({
   getCategoryRuns,
 }: CategoryFilterProps) {
   return (
-    <div className="flex gap-4 flex-wrap border-b border-border pb-3">
+    <div className="flex flex-wrap items-center gap-x-5 gap-y-2">
       <button
         onClick={() => onSelect("all")}
-        className={`text-base transition-colors ${
+        className={clsx(
+          "text-sm uppercase tracking-[0.18em] transition-colors",
           selected === "all"
             ? "text-text-primary"
-            : "text-text-muted hover:text-text-secondary"
-        }`}
+            : "text-text-muted hover:text-text-secondary",
+        )}
       >
-        All
-        <span className="font-mono ml-1.5 text-text-muted">{totalRuns}</span>
+        All {totalRuns}
       </button>
 
       {categoryIds.map((catId) => {
-        const identity = getCategoryIdentity(catId);
-        const isSelected = selected === catId;
         const runs = getCategoryRuns(catId);
-
         return (
           <button
             key={catId}
             onClick={() => onSelect(catId)}
-            className="flex items-center gap-1.5 text-base transition-colors capitalize"
-            style={{
-              color: isSelected ? identity.color : "var(--color-text-muted)",
-            }}
+            className={clsx(
+              "text-sm uppercase tracking-[0.18em] transition-colors",
+              selected === catId
+                ? "text-text-primary"
+                : "text-text-muted hover:text-text-secondary",
+            )}
           >
-            <span
-              className="w-1.5 h-1.5 rounded-full"
-              style={{ backgroundColor: identity.color }}
-            />
-            {catId}
-            <span className="font-mono opacity-50">{runs}</span>
+            {catId} {runs}
           </button>
         );
       })}

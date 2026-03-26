@@ -18,10 +18,7 @@ export default function DomainsGrid() {
           Choose your arena
         </h2>
 
-        <div
-          ref={ref}
-          className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-px bg-border"
-        >
+        <div ref={ref} className="border-t border-border">
           {categoryOrder.map((catId, i) => {
             const cat = categories.find((c) => c.id === catId);
             if (!cat) return null;
@@ -36,22 +33,15 @@ export default function DomainsGrid() {
               >
                 <AuthAwareLink
                   href={`/arena?category=${catId}`}
-                  className="block bg-bg-deep p-6 group h-full"
+                  className="group flex items-baseline gap-6 py-5 border-b border-border transition-colors duration-200 hover:bg-white/[0.02]"
                 >
-                  <div className="flex items-start justify-between mb-4">
-                    <span className="font-mono text-base text-text-muted">
-                      {identity.number}
-                    </span>
-                    <span
-                      className="w-1.5 h-1.5 rounded-full opacity-40 group-hover:opacity-100 transition-opacity duration-300"
-                      style={{ backgroundColor: identity.color }}
-                    />
-                  </div>
-
-                  <h3 className="font-display text-xl text-text-primary mb-2 group-hover:text-accent transition-colors duration-300">
+                  <span className="font-mono text-sm text-text-muted w-6 shrink-0">
+                    {identity.number}
+                  </span>
+                  <h3 className="font-display text-xl text-text-primary group-hover:text-accent transition-colors duration-200 w-32 shrink-0">
                     {cat.name}
                   </h3>
-                  <p className="text-base text-text-muted leading-relaxed">
+                  <p className="text-base text-text-secondary leading-relaxed hidden sm:block flex-1">
                     {cat.description}
                   </p>
                 </AuthAwareLink>

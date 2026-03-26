@@ -63,19 +63,22 @@ export default function LeaderboardClient({ data }: { data: LeaderboardData }) {
     );
   }
 
+  const stats = [
+    { label: "Runs", value: totalRuns },
+    { label: "Ideas", value: data.totals.ideas },
+    { label: "Leader", displayText: topModel?.modelName ?? "—" },
+    { label: "Top Score", value: topModel?.compositeScore ?? 0, decimals: 1 },
+  ];
+
   return (
-    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="space-y-8">
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-px bg-border border border-border">
-        {[
-          { label: "Runs", value: totalRuns },
-          { label: "Ideas", value: data.totals.ideas },
-          { label: "Leader", displayText: topModel?.modelName ?? "—" },
-          { label: "Top Composite", value: topModel?.compositeScore ?? 0, decimals: 1 },
-        ].map((stat) => (
-          <div key={stat.label} className="bg-bg-deep p-5">
+    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="space-y-12">
+      {/* Stats — clean horizontal display */}
+      <div className="flex flex-wrap gap-x-12 gap-y-6 border-b border-border pb-8">
+        {stats.map((stat) => (
+          <div key={stat.label}>
             <span className="label block mb-2">{stat.label}</span>
             {"displayText" in stat && stat.displayText ? (
-              <span className="font-display text-xl text-text-primary">{stat.displayText}</span>
+              <span className="font-display text-2xl text-text-primary">{stat.displayText}</span>
             ) : (
               <AnimatedNumber
                 value={stat.value ?? 0}
@@ -87,6 +90,7 @@ export default function LeaderboardClient({ data }: { data: LeaderboardData }) {
         ))}
       </div>
 
+      {/* Category filter */}
       <CategoryFilter
         categories={categoryIds}
         selected={selectedCategory}
@@ -95,37 +99,39 @@ export default function LeaderboardClient({ data }: { data: LeaderboardData }) {
         getCategoryRuns={getCategoryRuns}
       />
 
+      {/* Rankings */}
       {selectedCategory === "all" ? (
         <RankingsTable
           entries={data.global}
           title="Global Leaderboard"
-          subtitle={`Composite standing built from final placements, final ratings, and critique ratings across ${totalRuns} benchmark${totalRuns === 1 ? "" : "s"}`}
+          subtitle={`Composite standing across ${totalRuns} benchmark${totalRuns === 1 ? "" : "s"}`}
         />
       ) : (
         <RankingsTable
           entries={data.byCategory[selectedCategory] || []}
           title={`${selectedCategory.charAt(0).toUpperCase() + selectedCategory.slice(1)} Leaderboard`}
-          subtitle={`Composite standing across ${getCategoryRuns(selectedCategory)} run${getCategoryRuns(selectedCategory) === 1 ? "" : "s"} in this category`}
+          subtitle={`${getCategoryRuns(selectedCategory)} run${getCategoryRuns(selectedCategory) === 1 ? "" : "s"} in this category`}
         />
       )}
 
+      {/* Exports */}
       {isAuthenticated ? (
-        <div className="border-t border-border/70 pt-4">
+        <div className="border-t border-border pt-6">
           <div className="flex flex-wrap items-center gap-x-5 gap-y-3">
-            <span className="label">Exports</span>
+            <span className="label">Export</span>
             <button
               type="button"
               onClick={() => queueExport("json")}
               className="text-sm uppercase tracking-[0.18em] text-text-muted transition-colors hover:text-text-primary"
             >
-              Queue {selectedCategory === "all" ? "Global" : selectedCategory} JSON
+              JSON
             </button>
             <button
               type="button"
               onClick={() => queueExport("csv")}
               className="text-sm uppercase tracking-[0.18em] text-text-muted transition-colors hover:text-text-primary"
             >
-              Queue {selectedCategory === "all" ? "Global" : selectedCategory} CSV
+              CSV
             </button>
             {completedExports.map((entry) => (
               <a
@@ -133,7 +139,7 @@ export default function LeaderboardClient({ data }: { data: LeaderboardData }) {
                 href={entry.downloadUrl ?? "#"}
                 target="_blank"
                 rel="noreferrer"
-                className="text-sm text-text-muted transition-colors hover:text-text-primary"
+                className="text-sm text-accent transition-colors hover:text-accent-hover"
               >
                 Download {entry.format.toUpperCase()}
               </a>
