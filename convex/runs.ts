@@ -688,52 +688,46 @@ async function collectVisibleRunSearchDocsPage(
 ) {
   const viewerUserId = await getAuthUserId(ctx);
   const results: BenchmarkRunSummary[] = [];
-  let cursor = args.paginationOpts.cursor;
-  let isDone = false;
+  const pageResult = await fetchPage({
+    // Convex only allows one paginated query per function execution.
+    // Overfetch moderately so filtered pages are less likely to look sparse.
+    numItems: Math.max(args.paginationOpts.numItems, args.paginationOpts.numItems * 4),
+    cursor: args.paginationOpts.cursor,
+  });
 
-  while (results.length < args.paginationOpts.numItems && !isDone) {
-    const pageResult = await fetchPage({
-      numItems: args.paginationOpts.numItems,
-      cursor,
-    });
-
-    for (const searchDoc of pageResult.page) {
-      if (!matchesRunSearchDocFilters(searchDoc, args)) {
-        continue;
-      }
-      if (options?.extraFilter && !options.extraFilter(searchDoc)) {
-        continue;
-      }
-
-      const run = await ctx.db.get(searchDoc.runId);
-      if (!run) {
-        continue;
-      }
-
-      const membership = viewerUserId
-        ? await getProjectMembership(ctx, viewerUserId, run.projectId)
-        : null;
-      const organizationMembership = viewerUserId
-        ? await getOrganizationMembership(ctx, viewerUserId, run.organizationId)
-        : null;
-      if (!canReadRun(run, viewerUserId, membership, organizationMembership)) {
-        continue;
-      }
-
-      results.push(runSummaryFromSearchDoc(searchDoc, run, canEditRun(run, viewerUserId, membership)));
-      if (results.length >= args.paginationOpts.numItems) {
-        break;
-      }
+  for (const searchDoc of pageResult.page) {
+    if (!matchesRunSearchDocFilters(searchDoc, args)) {
+      continue;
+    }
+    if (options?.extraFilter && !options.extraFilter(searchDoc)) {
+      continue;
     }
 
-    cursor = pageResult.continueCursor;
-    isDone = pageResult.isDone;
+    const run = await ctx.db.get(searchDoc.runId);
+    if (!run) {
+      continue;
+    }
+
+    const membership = viewerUserId
+      ? await getProjectMembership(ctx, viewerUserId, run.projectId)
+      : null;
+    const organizationMembership = viewerUserId
+      ? await getOrganizationMembership(ctx, viewerUserId, run.organizationId)
+      : null;
+    if (!canReadRun(run, viewerUserId, membership, organizationMembership)) {
+      continue;
+    }
+
+    results.push(runSummaryFromSearchDoc(searchDoc, run, canEditRun(run, viewerUserId, membership)));
+    if (results.length >= args.paginationOpts.numItems) {
+      break;
+    }
   }
 
   return {
     page: results,
-    isDone,
-    continueCursor: cursor,
+    isDone: pageResult.isDone,
+    continueCursor: pageResult.continueCursor,
   };
 }
 
