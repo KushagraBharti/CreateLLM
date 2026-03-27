@@ -381,6 +381,7 @@ export interface BenchmarkRunSummary {
   modelCount: number;
   completedModelCount: number;
   failedModelCount: number;
+  canEdit: boolean;
 }
 
 export interface LeaderboardEntry {

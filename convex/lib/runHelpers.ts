@@ -347,7 +347,21 @@ export function canReadRun(
   return false;
 }
 
-export function runDocToSummary(run: Doc<"runs">): BenchmarkRunSummary {
+export function canEditRun(
+  run: Doc<"runs">,
+  viewerUserId: Id<"users"> | null,
+  projectMembership: Doc<"projectMembers"> | null,
+) {
+  if (!viewerUserId) {
+    return false;
+  }
+  if (run.ownerUserId === viewerUserId) {
+    return true;
+  }
+  return projectMembership?.role === "editor";
+}
+
+export function runDocToSummary(run: Doc<"runs">, canEdit = false): BenchmarkRunSummary {
   return {
     id: run._id,
     categoryId: run.categoryId,
@@ -358,6 +372,7 @@ export function runDocToSummary(run: Doc<"runs">): BenchmarkRunSummary {
     modelCount: run.participantCount,
     completedModelCount: run.completedParticipantCount,
     failedModelCount: run.failedParticipantCount,
+    canEdit,
   };
 }
 

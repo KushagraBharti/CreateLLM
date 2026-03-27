@@ -18,6 +18,14 @@ async function authOptions() {
   return token ? { token } : {};
 }
 
+const ARCHIVE_TERMINAL_STATUSES = [
+  "complete",
+  "partial",
+  "dead_lettered",
+  "canceled",
+  "error",
+] as const;
+
 function isTerminalStatus(status: BenchmarkRun["status"]) {
   return (
     status === "complete" ||
@@ -38,6 +46,7 @@ export interface ArchiveFilters {
   projectId?: string;
   categoryId?: string;
   status?: string;
+  statuses?: string[];
   visibility?: "private" | "org_shared" | "public" | "public_full";
   createdAfter?: number;
   createdBefore?: number;
@@ -45,7 +54,7 @@ export interface ArchiveFilters {
   numItems?: number;
 }
 
-export async function fetchArchivePage(filters: ArchiveFilters = {}): Promise<ArchivePageData> {
+async function fetchRunsPageInternal(filters: ArchiveFilters = {}): Promise<ArchivePageData> {
   const paginationOpts = {
     numItems: Math.min(Math.max(filters.numItems ?? 25, 1), 50),
     cursor: filters.cursor ?? null,
@@ -61,6 +70,7 @@ export async function fetchArchivePage(filters: ArchiveFilters = {}): Promise<Ar
         paginationOpts,
         categoryId: filters.categoryId || undefined,
         status: filters.status || undefined,
+        statuses: filters.statuses,
         visibility: filters.visibility,
         createdAfter: filters.createdAfter,
         createdBefore: filters.createdBefore,
@@ -77,12 +87,31 @@ export async function fetchArchivePage(filters: ArchiveFilters = {}): Promise<Ar
       paginationOpts,
       categoryId: filters.categoryId || undefined,
       status: filters.status || undefined,
+      statuses: filters.statuses,
       visibility: filters.visibility,
       createdAfter: filters.createdAfter,
       createdBefore: filters.createdBefore,
     },
     await authOptions(),
   )) as ArchivePageData;
+}
+
+export async function fetchRunsPage(filters: ArchiveFilters = {}): Promise<ArchivePageData> {
+  return fetchRunsPageInternal(filters);
+}
+
+export async function fetchArchivePage(filters: ArchiveFilters = {}): Promise<ArchivePageData> {
+  const requestedStatus = filters.status;
+  const archiveStatus =
+    requestedStatus && ARCHIVE_TERMINAL_STATUSES.includes(requestedStatus as typeof ARCHIVE_TERMINAL_STATUSES[number])
+      ? requestedStatus
+      : undefined;
+
+  return fetchRunsPageInternal({
+    ...filters,
+    status: archiveStatus,
+    statuses: filters.statuses ?? (archiveStatus ? undefined : [...ARCHIVE_TERMINAL_STATUSES]),
+  });
 }
 
 export async function fetchArchiveSummaries(): Promise<BenchmarkRunSummary[]> {
@@ -201,6 +230,10 @@ export async function fetchArchiveDetailRun(runId: string): Promise<BenchmarkRun
     }
   }
   return fetchRun(runId);
+}
+
+export async function fetchRunViewerCanEdit(runId: string): Promise<boolean> {
+  return fetchQuery(api.runs.viewerCanEdit, { runId: runId as never }, await authOptions());
 }
 
 export async function createBenchmarkRun(input: {

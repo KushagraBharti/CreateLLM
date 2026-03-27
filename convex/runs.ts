@@ -19,6 +19,7 @@ import { getEffectiveProviderPolicy, isModelAllowedByPolicy } from "./lib/polici
 import {
   buildPromptExcerpt,
   buildRunSearchText,
+  canEditRun,
   canReadRun,
   dayKeyFromTimestamp,
   runDocToSummary,
@@ -69,6 +70,7 @@ const runListFilterArgs = {
   projectId: v.optional(v.id("projects")),
   categoryId: v.optional(v.string()),
   status: v.optional(v.string()),
+  statuses: v.optional(v.array(v.string())),
   visibility: v.optional(exposureModeValidator),
   createdAfter: v.optional(v.number()),
   createdBefore: v.optional(v.number()),
@@ -105,6 +107,14 @@ const ACTIVE_RUN_STATUSES = [
   "voting",
 ] as const;
 
+const TERMINAL_RUN_STATUSES = [
+  "complete",
+  "partial",
+  "canceled",
+  "dead_lettered",
+  "error",
+] as const;
+
 const CHECKPOINT_STAGES = [
   "generate",
   "critique",
@@ -133,6 +143,22 @@ function isCountedCompleteStatus(status: Doc<"runParticipants">["status"]) {
 
 function isCountedFailedStatus(status: Doc<"runParticipants">["status"]) {
   return status === "failed" ? 1 : 0;
+}
+
+function matchesStatusFilters(
+  status: Doc<"runs">["status"],
+  args: {
+    status?: string;
+    statuses?: string[];
+  },
+) {
+  if (args.statuses?.length) {
+    return args.statuses.includes(status);
+  }
+  if (args.status) {
+    return args.status === status;
+  }
+  return true;
 }
 
 export function participantCounterDeltas(
@@ -506,6 +532,7 @@ async function collectVisibleRunSummariesPage(
     paginationOpts: { numItems: number; cursor: string | null };
     categoryId?: string;
     status?: string;
+    statuses?: string[];
     visibility?: Doc<"runs">["visibility"];
     createdAfter?: number;
     createdBefore?: number;
@@ -534,7 +561,7 @@ async function collectVisibleRunSummariesPage(
       if (args.categoryId && run.categoryId !== args.categoryId) {
         continue;
       }
-      if (args.status && run.status !== args.status) {
+      if (!matchesStatusFilters(run.status, args)) {
         continue;
       }
       if (!matchesCreatedAtRange(run.createdAt, args.createdAfter, args.createdBefore)) {
@@ -551,7 +578,7 @@ async function collectVisibleRunSummariesPage(
         continue;
       }
 
-      results.push(runDocToSummary(run));
+      results.push(runDocToSummary(run, canEditRun(run, viewerUserId, membership)));
       if (results.length >= args.paginationOpts.numItems) {
         break;
       }
@@ -573,6 +600,7 @@ function matchesRunSearchDocFilters(
   args: {
     categoryId?: string;
     status?: string;
+    statuses?: string[];
     visibility?: Doc<"runs">["visibility"];
     createdAfter?: number;
     createdBefore?: number;
@@ -587,7 +615,7 @@ function matchesRunSearchDocFilters(
   if (!options?.ignoreCategory && args.categoryId && searchDoc.categoryId !== args.categoryId) {
     return false;
   }
-  if (args.status && searchDoc.status !== args.status) {
+  if (!matchesStatusFilters(searchDoc.status, args)) {
     return false;
   }
   return matchesCreatedAtRange(searchDoc.createdAt, args.createdAfter, args.createdBefore);
@@ -640,6 +668,7 @@ async function collectVisibleRunSearchDocsPage(
     paginationOpts: { numItems: number; cursor: string | null };
     categoryId?: string;
     status?: string;
+    statuses?: string[];
     visibility?: Doc<"runs">["visibility"];
     createdAfter?: number;
     createdBefore?: number;
@@ -687,7 +716,7 @@ async function collectVisibleRunSearchDocsPage(
         continue;
       }
 
-      results.push(runSummaryFromSearchDoc(searchDoc, run));
+      results.push(runSummaryFromSearchDoc(searchDoc, run, canEditRun(run, viewerUserId, membership)));
       if (results.length >= args.paginationOpts.numItems) {
         break;
       }
@@ -709,6 +738,7 @@ async function collectVisibleRunSearchDocMetrics(
   args: {
     categoryId?: string;
     status?: string;
+    statuses?: string[];
     visibility?: Doc<"runs">["visibility"];
     createdAfter?: number;
     createdBefore?: number;
@@ -760,6 +790,7 @@ async function collectVisibleRunSearchDocMetrics(
 function runSummaryFromSearchDoc(
   searchDoc: Doc<"runSearchDocs">,
   run: Doc<"runs">,
+  canEdit: boolean,
 ): BenchmarkRunSummary {
   return {
     id: searchDoc.runId,
@@ -771,6 +802,7 @@ function runSummaryFromSearchDoc(
     modelCount: run.participantCount,
     completedModelCount: run.completedParticipantCount,
     failedModelCount: run.failedParticipantCount,
+    canEdit,
   };
 }
 
@@ -1022,6 +1054,20 @@ export const listEvents = query({
       .withIndex("by_run_and_created_at", (q) => q.eq("runId", args.runId))
       .order("desc")
       .paginate(args.paginationOpts);
+  },
+});
+
+export const viewerCanEdit = query({
+  args: { runId: v.id("runs") },
+  returns: v.boolean(),
+  handler: async (ctx, args) => {
+    const run = await ctx.db.get(args.runId);
+    if (!run) {
+      return false;
+    }
+    const viewerUserId = await getAuthUserId(ctx);
+    const membership = await getProjectMembership(ctx, viewerUserId, run.projectId);
+    return canEditRun(run, viewerUserId, membership);
   },
 });
 
@@ -1580,6 +1626,9 @@ export const pause = mutation({
     if (!run) {
       throw new ConvexError("Run not found");
     }
+    if (!["queued", "generating", "critiquing", "revising", "voting"].includes(run.status)) {
+      throw new ConvexError("Run cannot be paused in its current state");
+    }
     const { user } = await requireProjectAccess(ctx, run.projectId, "editor");
     const now = Date.now();
 
@@ -1607,6 +1656,13 @@ export const pause = mutation({
       metadata: { stage: run.checkpointStage },
       createdAt: now,
     });
+    const searchDoc = await ctx.db
+      .query("runSearchDocs")
+      .withIndex("by_run", (q) => q.eq("runId", run._id))
+      .unique();
+    if (searchDoc && searchDoc.status !== "paused") {
+      await ctx.db.patch(searchDoc._id, { status: "paused" });
+    }
 
     const nextRun = await ctx.db.get(run._id);
     return await hydrateRun(ctx, nextRun!);
@@ -1620,6 +1676,9 @@ export const resume = mutation({
     const run = await ctx.db.get(args.runId);
     if (!run) {
       throw new ConvexError("Run not found");
+    }
+    if (run.status !== "paused") {
+      throw new ConvexError("Only paused runs can be resumed");
     }
     const { user } = await requireProjectAccess(ctx, run.projectId, "editor");
     const now = Date.now();
@@ -1658,6 +1717,15 @@ export const resume = mutation({
       metadata: { stage: run.checkpointStage },
       createdAt: now,
     });
+    const resumedStatus =
+      run.checkpointStage === "human_critique" ? "awaiting_human_critique" : "queued";
+    const searchDoc = await ctx.db
+      .query("runSearchDocs")
+      .withIndex("by_run", (q) => q.eq("runId", run._id))
+      .unique();
+    if (searchDoc && searchDoc.status !== resumedStatus) {
+      await ctx.db.patch(searchDoc._id, { status: resumedStatus });
+    }
 
     const nextRun = await ctx.db.get(run._id);
     return await hydrateRun(ctx, nextRun!);
@@ -1709,6 +1777,13 @@ export const proceed = mutation({
       metadata: { stage: "human_critique" },
       createdAt: now,
     });
+    const searchDoc = await ctx.db
+      .query("runSearchDocs")
+      .withIndex("by_run", (q) => q.eq("runId", run._id))
+      .unique();
+    if (searchDoc && searchDoc.status !== "queued") {
+      await ctx.db.patch(searchDoc._id, { status: "queued" });
+    }
 
     const nextRun = await ctx.db.get(run._id);
     return await hydrateRun(ctx, nextRun!);
@@ -1725,6 +1800,9 @@ export const cancel = mutation({
     const run = await ctx.db.get(args.runId);
     if (!run) {
       throw new ConvexError("Run not found");
+    }
+    if ((TERMINAL_RUN_STATUSES as readonly string[]).includes(run.status)) {
+      throw new ConvexError("Run is already terminal");
     }
     const { user } = await requireProjectAccess(ctx, run.projectId, "editor");
     const now = Date.now();
@@ -1759,6 +1837,12 @@ export const cancel = mutation({
       currentStep: "Run canceled",
       updatedAt: now,
     }, "canceled", now);
+    await finalizeBenchmarkJob(ctx, {
+      runId: run._id,
+      status: "canceled",
+      completedAt: now,
+      error: args.reason ?? "Canceled by user",
+    });
     await ctx.db.insert("runEvents", {
       runId: run._id,
       stage: run.checkpointStage,
@@ -1780,6 +1864,13 @@ export const cancel = mutation({
       metadata: { stage: run.checkpointStage },
       createdAt: now,
     });
+    const searchDoc = await ctx.db
+      .query("runSearchDocs")
+      .withIndex("by_run", (q) => q.eq("runId", run._id))
+      .unique();
+    if (searchDoc && searchDoc.status !== "canceled") {
+      await ctx.db.patch(searchDoc._id, { status: "canceled" });
+    }
 
     const nextRun = await ctx.db.get(run._id);
     return await hydrateRun(ctx, nextRun!);
@@ -1800,8 +1891,8 @@ export const remove = mutation({
     }
     const { user } = await requireProjectAccess(ctx, run.projectId, "editor");
 
-    if ((ACTIVE_RUN_STATUSES as readonly string[]).includes(run.status)) {
-      throw new ConvexError("Cancel or finish the run before deleting it");
+    if (!(TERMINAL_RUN_STATUSES as readonly string[]).includes(run.status)) {
+      throw new ConvexError("Only terminal runs can be deleted");
     }
 
     const deletedAt = Date.now();
@@ -1933,6 +2024,8 @@ export const remove = mutation({
     }
 
     await ctx.db.delete(run._id);
+
+    await ctx.scheduler.runAfter(0, internal.leaderboards.rebuildSnapshotsInternal, {});
 
     return {
       deletedRunId: run._id,

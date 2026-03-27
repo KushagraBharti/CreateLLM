@@ -88,7 +88,7 @@ function ArenaContent() {
     if (typeof window === "undefined") return;
     const pendingRunId = window.sessionStorage.getItem("novelbench:pending-arena-run");
     if (pendingRunId) {
-      setRedirectTarget(`/arena/${pendingRunId}`);
+      setRedirectTarget(`/runs/${pendingRunId}`);
     }
   }, []);
 
@@ -127,7 +127,7 @@ function ArenaContent() {
     if (typeof window !== "undefined") {
       window.sessionStorage.setItem("novelbench:pending-arena-run", runId);
     }
-    setRedirectTarget(`/arena/${runId}`);
+    setRedirectTarget(`/runs/${runId}`);
   }, [runId]);
 
   useEffect(() => {
@@ -160,7 +160,7 @@ function ArenaContent() {
         if (typeof window !== "undefined") {
           window.sessionStorage.setItem("novelbench:pending-arena-run", runId);
         }
-        setRedirectTarget(`/arena/${runId}`);
+        setRedirectTarget(`/runs/${runId}`);
       }
     },
     [canStart, categoryId, customModelIds, prompt, selectedModelIds, startBenchmark]
@@ -180,7 +180,7 @@ function ArenaContent() {
         if (typeof window !== "undefined") {
           window.sessionStorage.setItem("novelbench:pending-arena-run", runId);
         }
-        setRedirectTarget(`/arena/${runId}`);
+        setRedirectTarget(`/runs/${runId}`);
       }
     },
     [categoryId, customModelIds, isRunning, selectedModelIds, startBenchmark]
@@ -309,7 +309,7 @@ function ArenaContent() {
                   onRestartRun={async () => {
                     const next = await restartBenchmark();
                     if (next?.id) {
-                      router.push(`/arena/${next.id}`);
+                      router.push(`/runs/${next.id}`);
                     }
                   }}
                 />
