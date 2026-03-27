@@ -228,6 +228,10 @@ export async function cancelBenchmarkRunServer(runId: string, reason?: string) {
   return fetchMutation(api.runs.cancel, { runId: runId as never, reason }, await authOptions());
 }
 
+export async function deleteBenchmarkRunServer(runId: string) {
+  return fetchMutation(api.runs.remove, { runId: runId as never }, await authOptions());
+}
+
 export async function submitHumanCritiquesServer(
   runId: string,
   critiques: Omit<HumanCritiqueEntry, "id" | "timestamp">[],

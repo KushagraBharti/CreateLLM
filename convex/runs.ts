@@ -105,6 +105,15 @@ const ACTIVE_RUN_STATUSES = [
   "voting",
 ] as const;
 
+const CHECKPOINT_STAGES = [
+  "generate",
+  "critique",
+  "human_critique",
+  "revise",
+  "vote",
+  "complete",
+] as const;
+
 const LIVE_ACTIVITY_EVENT_KINDS = [
   "live_token",
   "tool_call_activity",
@@ -808,6 +817,101 @@ async function recordResearchPreflightJob(
         ? "Research enabled but Exa is not configured; benchmark stages will continue without search."
         : undefined,
   });
+}
+
+async function reverseRunAccountingAndStats(
+  ctx: MutationCtx,
+  run: Doc<"runs">,
+  deletedAt: number,
+) {
+  const dayKey = dayKeyFromTimestamp(run.createdAt);
+  const monthKey = dayKey.slice(0, 7);
+  const settledCostUsd = run.settledCostUsd ?? 0;
+  const reservedBudgetUsd = run.reservedBudgetUsd ?? 0;
+
+  if (run.budgetSettledAt) {
+    await upsertUsageBudget(ctx, {
+      organizationId: run.organizationId,
+      projectId: run.projectId,
+      period: "day",
+      periodKey: dayKey,
+      reservedDeltaUsd: 0,
+      settledDeltaUsd: -settledCostUsd,
+      updatedAt: deletedAt,
+    });
+    await upsertUsageBudget(ctx, {
+      organizationId: run.organizationId,
+      projectId: run.projectId,
+      period: "month",
+      periodKey: monthKey,
+      reservedDeltaUsd: 0,
+      settledDeltaUsd: -settledCostUsd,
+      updatedAt: deletedAt,
+    });
+  } else if (reservedBudgetUsd > 0) {
+    await upsertUsageBudget(ctx, {
+      organizationId: run.organizationId,
+      projectId: run.projectId,
+      period: "day",
+      periodKey: dayKey,
+      reservedDeltaUsd: -reservedBudgetUsd,
+      settledDeltaUsd: 0,
+      updatedAt: deletedAt,
+    });
+    await upsertUsageBudget(ctx, {
+      organizationId: run.organizationId,
+      projectId: run.projectId,
+      period: "month",
+      periodKey: monthKey,
+      reservedDeltaUsd: -reservedBudgetUsd,
+      settledDeltaUsd: 0,
+      updatedAt: deletedAt,
+    });
+  }
+
+  const usageDaily = await ctx.db
+    .query("projectUsageDaily")
+    .withIndex("by_project_and_day", (q) => q.eq("projectId", run.projectId).eq("dayKey", dayKey))
+    .unique();
+  if (usageDaily) {
+    const nextRunCount = Math.max(0, usageDaily.runCount - 1);
+    const nextSettledCost = Math.max(0, usageDaily.settledCostUsd - settledCostUsd);
+    if (nextRunCount === 0 && nextSettledCost === 0) {
+      await ctx.db.delete(usageDaily._id);
+    } else {
+      await ctx.db.patch(usageDaily._id, {
+        runCount: nextRunCount,
+        settledCostUsd: nextSettledCost,
+        updatedAt: deletedAt,
+      });
+    }
+  }
+
+  const categoryStats = await ctx.db
+    .query("categoryStatsDaily")
+    .withIndex("by_category_and_day", (q) => q.eq("categoryId", run.categoryId).eq("dayKey", dayKey))
+    .unique();
+  if (categoryStats) {
+    const nextRuns = Math.max(0, categoryStats.runs - 1);
+    const nextCompletedRuns = Math.max(
+      0,
+      categoryStats.completedRuns - (run.status === "complete" ? 1 : 0),
+    );
+    const nextPartialRuns = Math.max(
+      0,
+      categoryStats.partialRuns - (run.status === "partial" || run.status === "dead_lettered" ? 1 : 0),
+    );
+    if (nextRuns === 0 && nextCompletedRuns === 0 && nextPartialRuns === 0) {
+      await ctx.db.delete(categoryStats._id);
+    } else {
+      await ctx.db.patch(categoryStats._id, {
+        runs: nextRuns,
+        completedRuns: nextCompletedRuns,
+        partialRuns: nextPartialRuns,
+        updatedAt: deletedAt,
+      });
+    }
+  }
 }
 
 async function recordValidationRepairJob(
@@ -1679,6 +1783,160 @@ export const cancel = mutation({
 
     const nextRun = await ctx.db.get(run._id);
     return await hydrateRun(ctx, nextRun!);
+  },
+});
+
+export const remove = mutation({
+  args: {
+    runId: v.id("runs"),
+  },
+  returns: v.object({
+    deletedRunId: v.id("runs"),
+  }),
+  handler: async (ctx, args) => {
+    const run = await ctx.db.get(args.runId);
+    if (!run) {
+      throw new ConvexError("Run not found");
+    }
+    const { user } = await requireProjectAccess(ctx, run.projectId, "editor");
+
+    if ((ACTIVE_RUN_STATUSES as readonly string[]).includes(run.status)) {
+      throw new ConvexError("Cancel or finish the run before deleting it");
+    }
+
+    const deletedAt = Date.now();
+
+    const [
+      participants,
+      events,
+      artifacts,
+      jobs,
+      runSearchDocs,
+      usageEntries,
+      exportsForRun,
+      stageStates,
+    ] = await Promise.all([
+      ctx.db.query("runParticipants").withIndex("by_run", (q) => q.eq("runId", run._id)).collect(),
+      ctx.db
+        .query("runEvents")
+        .withIndex("by_run_and_created_at", (q) => q.eq("runId", run._id))
+        .collect(),
+      ctx.db.query("runArtifacts").withIndex("by_run", (q) => q.eq("runId", run._id)).collect(),
+      ctx.db.query("jobs").withIndex("by_run", (q) => q.eq("runId", run._id)).collect(),
+      ctx.db.query("runSearchDocs").withIndex("by_run", (q) => q.eq("runId", run._id)).collect(),
+      ctx.db.query("usageLedger").withIndex("by_run", (q) => q.eq("runId", run._id)).collect(),
+      ctx.db.query("exports").withIndex("by_run", (q) => q.eq("runId", run._id)).collect(),
+      Promise.all(
+        CHECKPOINT_STAGES.map((stage) =>
+          ctx.db
+            .query("runStageStates")
+            .withIndex("by_run_and_stage", (q) => q.eq("runId", run._id).eq("stage", stage))
+            .unique(),
+        ),
+      ),
+    ]);
+
+    const jobAttemptsNested = await Promise.all(
+      jobs.map((job) => ctx.db.query("jobAttempts").withIndex("by_job", (q) => q.eq("jobId", job._id)).collect()),
+    );
+    const exportAuditLogsNested = await Promise.all(
+      exportsForRun.map((entry) =>
+        ctx.db
+          .query("auditLogs")
+          .withIndex("by_resource", (q) => q.eq("resourceType", "export").eq("resourceId", String(entry._id)))
+          .collect(),
+      ),
+    );
+    const runAuditLogs = await ctx.db
+      .query("auditLogs")
+      .withIndex("by_resource", (q) => q.eq("resourceType", "run").eq("resourceId", String(run._id)))
+      .collect();
+
+    await reverseRunAccountingAndStats(ctx, run, deletedAt);
+
+    const storageIds = new Set<string>();
+    for (const artifact of artifacts) {
+      if (artifact.storageId) {
+        storageIds.add(String(artifact.storageId));
+      }
+    }
+    for (const exportDoc of exportsForRun) {
+      if (exportDoc.storageId) {
+        storageIds.add(String(exportDoc.storageId));
+      }
+    }
+
+    for (const storageId of storageIds) {
+      await ctx.storage.delete(storageId as Id<"_storage">);
+    }
+
+    for (const log of runAuditLogs) {
+      await ctx.db.delete(log._id);
+    }
+    for (const logs of exportAuditLogsNested) {
+      for (const log of logs) {
+        await ctx.db.delete(log._id);
+      }
+    }
+
+    for (const stageState of stageStates) {
+      if (stageState) {
+        await ctx.db.delete(stageState._id);
+      }
+    }
+    for (const usageEntry of usageEntries) {
+      await ctx.db.delete(usageEntry._id);
+    }
+    for (const doc of runSearchDocs) {
+      await ctx.db.delete(doc._id);
+    }
+    for (const artifact of artifacts) {
+      await ctx.db.delete(artifact._id);
+    }
+    for (const event of events) {
+      await ctx.db.delete(event._id);
+    }
+    for (const participant of participants) {
+      await ctx.db.delete(participant._id);
+    }
+    for (const exportDoc of exportsForRun) {
+      await ctx.db.delete(exportDoc._id);
+    }
+    for (const attempts of jobAttemptsNested) {
+      for (const attempt of attempts) {
+        await ctx.db.delete(attempt._id);
+      }
+    }
+    for (const job of jobs) {
+      await ctx.db.delete(job._id);
+    }
+
+    await ctx.db.insert("auditLogs", {
+      actorUserId: user._id,
+      organizationId: run.organizationId,
+      projectId: run.projectId,
+      action: "run.deleted",
+      resourceType: "run",
+      resourceId: String(run._id),
+      metadata: {
+        deletedStatus: run.status,
+      },
+      createdAt: deletedAt,
+    });
+
+    const deleteLog = await ctx.db
+      .query("auditLogs")
+      .withIndex("by_resource", (q) => q.eq("resourceType", "run").eq("resourceId", String(run._id)))
+      .collect();
+    for (const log of deleteLog) {
+      await ctx.db.delete(log._id);
+    }
+
+    await ctx.db.delete(run._id);
+
+    return {
+      deletedRunId: run._id,
+    };
   },
 });
 
