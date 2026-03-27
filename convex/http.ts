@@ -59,7 +59,7 @@ http.route({
   handler: httpAction(async (ctx, request) => {
     try {
       requireMigrationSecret(request);
-      await ctx.runMutation(internal.leaderboards.rebuildSnapshotsInternal, {});
+      await ctx.runAction(internal.leaderboards.rebuildSnapshotsInternal, {});
       return Response.json({ ok: true });
     } catch (error) {
       return Response.json(

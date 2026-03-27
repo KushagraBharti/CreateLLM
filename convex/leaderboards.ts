@@ -1,32 +1,15 @@
-import { ConvexError, v } from "convex/values";
-import { internalMutation, internalQuery, query } from "./_generated/server";
-import { buildLeaderboardData } from "./lib/leaderboard";
-import { runDocsToBenchmarkRun } from "./lib/runHelpers";
-import type { BenchmarkRun, LeaderboardVotePhase } from "@/types";
+import { paginationOptsValidator } from "convex/server";
+import { v } from "convex/values";
+import type { LeaderboardVotePhase } from "@/types";
+import { internal } from "./_generated/api";
+import { internalAction, internalMutation, internalQuery, query } from "./_generated/server";
+import { buildLeaderboardDataFromRecords } from "./lib/leaderboard";
+import type { LeaderboardRunRecord } from "./lib/leaderboard";
 
 const votePhaseValidator = v.union(v.literal("initial"), v.literal("final"));
 
 function toSnapshotKey(categoryId?: string, votePhase: LeaderboardVotePhase = "final") {
   return categoryId ? `category:${categoryId}:${votePhase}` : `global:${votePhase}`;
-}
-
-async function collectRunsByStatus(
-  ctx: Parameters<typeof query>[0] extends never ? never : any,
-  status: "complete" | "partial",
-) {
-  const runs = [];
-  const runQuery = ctx.db
-    .query("runs")
-    .withIndex("by_status_and_created_at", (q: any) => q.eq("status", status))
-    .order("desc");
-
-  for await (const run of runQuery) {
-    if (run.visibility === "public" || run.visibility === "public_full") {
-      runs.push(run);
-    }
-  }
-
-  return runs;
 }
 
 export const get = query({
@@ -84,20 +67,25 @@ export const getSnapshotInternal = internalQuery({
   },
 });
 
-export const rebuildSnapshotsInternal = internalMutation({
+export const getRunRecordsPageInternal = internalQuery({
   args: {
-    runId: v.optional(v.id("runs")),
+    status: v.union(v.literal("complete"), v.literal("partial")),
+    paginationOpts: paginationOptsValidator,
   },
-  returns: v.null(),
+  returns: v.any(),
   handler: async (ctx, args) => {
-    const [completeRuns, partialRuns] = await Promise.all([
-      collectRunsByStatus(ctx, "complete"),
-      collectRunsByStatus(ctx, "partial"),
-    ]);
-    const runs = [...completeRuns, ...partialRuns];
-    const hydrated: BenchmarkRun[] = [];
+    const page = await ctx.db
+      .query("runs")
+      .withIndex("by_status_and_created_at", (q) => q.eq("status", args.status))
+      .order("desc")
+      .paginate(args.paginationOpts);
 
-    for (const run of runs) {
+    const records: LeaderboardRunRecord[] = [];
+    for (const run of page.page) {
+      if (run.visibility !== "public" && run.visibility !== "public_full") {
+        continue;
+      }
+
       const [participants, events] = await Promise.all([
         ctx.db.query("runParticipants").withIndex("by_run", (q) => q.eq("runId", run._id)).collect(),
         ctx.db
@@ -105,12 +93,139 @@ export const rebuildSnapshotsInternal = internalMutation({
           .withIndex("by_run_and_created_at", (q) => q.eq("runId", run._id))
           .collect(),
       ]);
-      hydrated.push(runDocsToBenchmarkRun({ run, participants, events }));
+
+      records.push({
+        categoryId: run.categoryId,
+        status: run.status,
+        updatedAt: new Date(run.updatedAt).toISOString(),
+        ideaModelIds: participants
+          .filter((participant) => participant.generatedIdea)
+          .map((participant) => participant.modelId),
+        revisedIdeaModelIds: participants
+          .filter((participant) => participant.revisedIdea)
+          .map((participant) => participant.modelId),
+        critiqueVotes: participants
+          .filter((participant) => participant.critiqueResult)
+          .sort((a, b) => a.order - b.order)
+          .map((participant) => participant.critiqueResult as LeaderboardRunRecord["critiqueVotes"][number]),
+        finalRankings: participants
+          .filter((participant) => participant.finalRanking)
+          .sort((a, b) => a.order - b.order)
+          .map((participant) => participant.finalRanking as LeaderboardRunRecord["finalRankings"][number]),
+        humanCritiqueCount: events
+          .filter((event) => event.kind === "human_critique_submitted")
+          .reduce(
+            (sum, event) =>
+              sum +
+              (((event.payload as { critiques?: unknown[] } | undefined)?.critiques?.length) ?? 0),
+            0,
+          ),
+        completedModelCount: participants.filter((participant) => participant.status === "complete").length,
+      });
     }
 
-    const now = Date.now();
+    return {
+      page: records,
+      isDone: page.isDone,
+      continueCursor: page.continueCursor,
+    };
+  },
+});
+
+export const writeSnapshotsInternal = internalMutation({
+  args: {
+    keys: v.array(v.any()),
+    modelStats: v.array(v.any()),
+    updatedAt: v.number(),
+  },
+  returns: v.null(),
+  handler: async (ctx, args) => {
+    const existingSnapshots = await ctx.db.query("leaderboardSnapshots").collect();
+    const nextSnapshotKeys = new Set(args.keys.map((entry: any) => entry.snapshotKey));
+
+    for (const snapshot of existingSnapshots) {
+      if (!nextSnapshotKeys.has(snapshot.snapshotKey)) {
+        await ctx.db.delete(snapshot._id);
+      }
+    }
+
+    for (const entry of args.keys) {
+      const existing = await ctx.db
+        .query("leaderboardSnapshots")
+        .withIndex("by_snapshot_key", (q) => q.eq("snapshotKey", entry.snapshotKey))
+        .unique();
+      const payload = {
+        snapshotKey: entry.snapshotKey,
+        scopeType: entry.scopeType,
+        scopeValue: entry.scopeValue,
+        entries: entry.entries,
+        totals: entry.totals,
+        updatedAt: args.updatedAt,
+      };
+      if (existing) {
+        await ctx.db.patch(existing._id, payload);
+      } else {
+        await ctx.db.insert("leaderboardSnapshots", payload);
+      }
+    }
+
+    while (true) {
+      const batch = await ctx.db.query("modelStatsDaily").take(128);
+      if (batch.length === 0) {
+        break;
+      }
+      await Promise.all(batch.map((entry) => ctx.db.delete(entry._id)));
+    }
+
+    for (const entry of args.modelStats) {
+      await ctx.db.insert("modelStatsDaily", {
+        modelId: entry.modelId,
+        dayKey: entry.dayKey,
+        wins: entry.wins,
+        runs: entry.runs,
+        averageFinalScore: entry.averageFinalScore,
+        averageFinalRank: entry.averageFinalRank,
+        updatedAt: args.updatedAt,
+      });
+    }
+
+    return null;
+  },
+});
+
+export const rebuildSnapshotsInternal = internalAction({
+  args: {
+    runId: v.optional(v.id("runs")),
+  },
+  returns: v.null(),
+  handler: async (ctx) => {
+    const records: LeaderboardRunRecord[] = [];
+
+    for (const status of ["complete", "partial"] as const) {
+      let cursor: string | null = null;
+      let isDone = false;
+
+      while (!isDone) {
+        const page: {
+          page: LeaderboardRunRecord[];
+          isDone: boolean;
+          continueCursor: string | null;
+        } = await ctx.runQuery(internal.leaderboards.getRunRecordsPageInternal, {
+          status,
+          paginationOpts: {
+            numItems: 8,
+            cursor,
+          },
+        });
+        records.push(...(page.page as LeaderboardRunRecord[]));
+        cursor = page.continueCursor;
+        isDone = page.isDone;
+      }
+    }
+
+    const updatedAt = Date.now();
     const keys = (["final", "initial"] as const).flatMap((votePhase) => {
-      const leaderboard = buildLeaderboardData(hydrated, votePhase);
+      const leaderboard = buildLeaderboardDataFromRecords(records, votePhase);
       return [
         {
           snapshotKey: toSnapshotKey(undefined, votePhase),
@@ -134,44 +249,7 @@ export const rebuildSnapshotsInternal = internalMutation({
       ];
     });
 
-    const existingSnapshots = await ctx.db.query("leaderboardSnapshots").collect();
-    const nextSnapshotKeys = new Set(keys.map((entry) => entry.snapshotKey));
-
-    for (const snapshot of existingSnapshots) {
-      if (!nextSnapshotKeys.has(snapshot.snapshotKey)) {
-        await ctx.db.delete(snapshot._id);
-      }
-    }
-
-    for (const entry of keys) {
-      const existing = await ctx.db
-        .query("leaderboardSnapshots")
-        .withIndex("by_snapshot_key", (q) => q.eq("snapshotKey", entry.snapshotKey))
-        .unique();
-      const payload = {
-        snapshotKey: entry.snapshotKey,
-        scopeType: entry.scopeType,
-        scopeValue: entry.scopeValue,
-        entries: entry.entries,
-        totals: entry.totals,
-        updatedAt: now,
-      };
-      if (existing) {
-        await ctx.db.patch(existing._id, payload);
-      } else {
-        await ctx.db.insert("leaderboardSnapshots", payload);
-      }
-    }
-
-    while (true) {
-      const batch = await ctx.db.query("modelStatsDaily").take(128);
-      if (batch.length === 0) {
-        break;
-      }
-      await Promise.all(batch.map((entry) => ctx.db.delete(entry._id)));
-    }
-
-    const modelStats = new Map<
+    const modelStatsMap = new Map<
       string,
       {
         modelId: string;
@@ -183,12 +261,12 @@ export const rebuildSnapshotsInternal = internalMutation({
       }
     >();
 
-    for (const hydratedRun of hydrated) {
-      const dayKey = new Date(hydratedRun.updatedAt).toISOString().slice(0, 10);
-      for (const ranking of hydratedRun.finalRankings) {
+    for (const record of records) {
+      const dayKey = new Date(record.updatedAt).toISOString().slice(0, 10);
+      for (const ranking of record.finalRankings) {
         for (const entry of ranking.rankings) {
           const key = `${entry.modelId}:${dayKey}`;
-          const current = modelStats.get(key) ?? {
+          const current = modelStatsMap.get(key) ?? {
             modelId: entry.modelId,
             dayKey,
             wins: 0,
@@ -200,22 +278,23 @@ export const rebuildSnapshotsInternal = internalMutation({
           current.runs += 1;
           current.scoreTotal += entry.score;
           current.rankTotal += entry.rank;
-          modelStats.set(key, current);
+          modelStatsMap.set(key, current);
         }
       }
     }
 
-    for (const entry of modelStats.values()) {
-      await ctx.db.insert("modelStatsDaily", {
+    await ctx.runMutation(internal.leaderboards.writeSnapshotsInternal, {
+      keys,
+      updatedAt,
+      modelStats: Array.from(modelStatsMap.values()).map((entry) => ({
         modelId: entry.modelId,
         dayKey: entry.dayKey,
         wins: entry.wins,
         runs: entry.runs,
         averageFinalScore: entry.scoreTotal / entry.runs,
         averageFinalRank: entry.rankTotal / entry.runs,
-        updatedAt: now,
-      });
-    }
+      })),
+    });
 
     return null;
   },

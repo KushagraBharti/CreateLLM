@@ -23,6 +23,7 @@ import {
   dayKeyFromTimestamp,
   runDocToSummary,
   runDocsToBenchmarkRun,
+  runDocsToBenchmarkRunLite,
 } from "./lib/runHelpers";
 import {
   createQueuedJob,
@@ -103,6 +104,32 @@ const ACTIVE_RUN_STATUSES = [
   "revising",
   "voting",
 ] as const;
+
+const LIVE_ACTIVITY_EVENT_KINDS = [
+  "live_token",
+  "tool_call_activity",
+  "reasoning_detail",
+] as const;
+
+type LiveActivityEventKind = (typeof LIVE_ACTIVITY_EVENT_KINDS)[number];
+
+function isCountedCompleteStatus(status: Doc<"runParticipants">["status"]) {
+  return status === "complete" ? 1 : 0;
+}
+
+function isCountedFailedStatus(status: Doc<"runParticipants">["status"]) {
+  return status === "failed" ? 1 : 0;
+}
+
+function participantCounterDeltas(
+  previousStatus: Doc<"runParticipants">["status"],
+  nextStatus: Doc<"runParticipants">["status"],
+) {
+  return {
+    completedDelta: isCountedCompleteStatus(nextStatus) - isCountedCompleteStatus(previousStatus),
+    failedDelta: isCountedFailedStatus(nextStatus) - isCountedFailedStatus(previousStatus),
+  };
+}
 
 async function getProjectMembership(
   ctx: QueryCtx | MutationCtx,
@@ -345,6 +372,74 @@ async function hydrateRun(
   return runDocsToBenchmarkRun({ run, participants, events });
 }
 
+async function hydrateRunLite(
+  ctx: QueryCtx | MutationCtx,
+  run: Doc<"runs">,
+) {
+  const participants = await ctx.db
+    .query("runParticipants")
+    .withIndex("by_run", (q) => q.eq("runId", run._id))
+    .collect();
+  return runDocsToBenchmarkRunLite({ run, participants });
+}
+
+function mapLiveActivityEvents(
+  events: Doc<"runEvents">[],
+) {
+  return events.map((event) => ({
+    id: String(event._id),
+    kind: event.kind,
+    stage: event.stage,
+    participantModelId: event.participantModelId,
+    payload: event.payload ?? null,
+    createdAt: event.createdAt,
+  }));
+}
+
+async function loadExecutionContext(
+  ctx: QueryCtx,
+  runId: Id<"runs">,
+) {
+  const run = await ctx.db.get(runId);
+  if (!run) {
+    throw new ConvexError("Run not found");
+  }
+
+  const [projectPolicy, orgPolicy, vaultEntry, exaEntry] = await Promise.all([
+    ctx.db
+      .query("providerPolicies")
+      .withIndex("by_organization_and_project", (q) =>
+        q.eq("organizationId", run.organizationId).eq("projectId", run.projectId),
+      )
+      .unique(),
+    ctx.db
+      .query("providerPolicies")
+      .withIndex("by_organization_and_project", (q) =>
+        q.eq("organizationId", run.organizationId).eq("projectId", undefined),
+      )
+      .unique(),
+    ctx.db
+      .query("providerVaultEntries")
+      .withIndex("by_user_and_provider", (q) =>
+        q.eq("userId", run.ownerUserId).eq("provider", "openrouter"),
+      )
+      .unique(),
+    ctx.db
+      .query("providerVaultEntries")
+      .withIndex("by_user_and_provider", (q) =>
+        q.eq("userId", run.ownerUserId).eq("provider", "exa"),
+      )
+      .unique(),
+  ]);
+
+  return {
+    run,
+    policy: projectPolicy ?? orgPolicy,
+    vaultEntry,
+    exaEntry,
+  };
+}
+
 async function collectVisibleRunSummariesPage(
   ctx: QueryCtx,
   args: {
@@ -558,11 +653,7 @@ async function collectVisibleRunSearchDocMetrics(
     createdAfter?: number;
     createdBefore?: number;
   },
-  fetchPage: (paginationOpts: { numItems: number; cursor: string | null }) => Promise<{
-    page: Doc<"runSearchDocs">[];
-    isDone: boolean;
-    continueCursor: string | null;
-  }>,
+  fetchDocs: () => Promise<Doc<"runSearchDocs">[]>,
   options?: {
     ignoreCategory?: boolean;
     extraFilter?: (searchDoc: Doc<"runSearchDocs">) => boolean;
@@ -571,44 +662,33 @@ async function collectVisibleRunSearchDocMetrics(
   const viewerUserId = await getAuthUserId(ctx);
   const categoryCounts: Record<string, number> = {};
   let totalMatchingRuns = 0;
-  let cursor: string | null = null;
-  let isDone = false;
 
-  while (!isDone) {
-    const pageResult = await fetchPage({
-      numItems: 50,
-      cursor,
-    });
-
-    for (const searchDoc of pageResult.page) {
-      if (!matchesRunSearchDocFilters(searchDoc, args, options)) {
-        continue;
-      }
-      if (options?.extraFilter && !options.extraFilter(searchDoc)) {
-        continue;
-      }
-
-      const run = await ctx.db.get(searchDoc.runId);
-      if (!run) {
-        continue;
-      }
-
-      const membership = viewerUserId
-        ? await getProjectMembership(ctx, viewerUserId, run.projectId)
-        : null;
-      const organizationMembership = viewerUserId
-        ? await getOrganizationMembership(ctx, viewerUserId, run.organizationId)
-        : null;
-      if (!canReadRun(run, viewerUserId, membership, organizationMembership)) {
-        continue;
-      }
-
-      totalMatchingRuns += 1;
-      categoryCounts[searchDoc.categoryId] = (categoryCounts[searchDoc.categoryId] ?? 0) + 1;
+  const docs = await fetchDocs();
+  for (const searchDoc of docs) {
+    if (!matchesRunSearchDocFilters(searchDoc, args, options)) {
+      continue;
+    }
+    if (options?.extraFilter && !options.extraFilter(searchDoc)) {
+      continue;
     }
 
-    cursor = pageResult.continueCursor;
-    isDone = pageResult.isDone;
+    const run = await ctx.db.get(searchDoc.runId);
+    if (!run) {
+      continue;
+    }
+
+    const membership = viewerUserId
+      ? await getProjectMembership(ctx, viewerUserId, run.projectId)
+      : null;
+    const organizationMembership = viewerUserId
+      ? await getOrganizationMembership(ctx, viewerUserId, run.organizationId)
+      : null;
+    if (!canReadRun(run, viewerUserId, membership, organizationMembership)) {
+      continue;
+    }
+
+    totalMatchingRuns += 1;
+    categoryCounts[searchDoc.categoryId] = (categoryCounts[searchDoc.categoryId] ?? 0) + 1;
   }
 
   return {
@@ -732,21 +812,21 @@ export const list = query({
   },
   returns: v.any(),
   handler: async (ctx, args) => {
-    const baseQuery = buildRunSearchDocsBaseQuery(ctx, args);
+    const buildBaseQuery = () => buildRunSearchDocsBaseQuery(ctx, args);
     const page = await collectVisibleRunSearchDocsPage(ctx, args, (paginationOpts) =>
-      baseQuery.order("desc").paginate(paginationOpts),
+      buildBaseQuery().order("desc").paginate(paginationOpts),
     );
     const [filteredMetrics, allCategoryMetrics] = await Promise.all([
-      collectVisibleRunSearchDocMetrics(ctx, args, (paginationOpts) =>
-        baseQuery.order("desc").paginate(paginationOpts),
+      collectVisibleRunSearchDocMetrics(ctx, args, () =>
+        buildBaseQuery().order("desc").collect(),
       ),
       collectVisibleRunSearchDocMetrics(
         ctx,
         args,
-        (paginationOpts) =>
+        () =>
           buildRunSearchDocsBaseQuery(ctx, args, { ignoreCategory: true })
             .order("desc")
-            .paginate(paginationOpts),
+            .collect(),
         { ignoreCategory: true },
       ),
     ]);
@@ -790,9 +870,22 @@ export const listEvents = query({
   },
 });
 
-export const liveActivity = query({
+export const getMetadata = query({
+  args: { runId: v.id("runs") },
+  returns: v.union(v.null(), v.any()),
+  handler: async (ctx, args) => {
+    const accessible = await loadAccessibleRun(ctx, args.runId);
+    if (!accessible) {
+      return null;
+    }
+    return await hydrateRunLite(ctx, accessible.run);
+  },
+});
+
+export const liveActivitySince = query({
   args: {
     runId: v.id("runs"),
+    sinceCreatedAt: v.optional(v.number()),
   },
   returns: v.any(),
   handler: async (ctx, args) => {
@@ -801,25 +894,28 @@ export const liveActivity = query({
       throw new ConvexError("Run not found");
     }
 
-    const events = await ctx.db
-      .query("runEvents")
-      .withIndex("by_run_and_created_at", (q) => q.eq("runId", args.runId))
-      .collect();
-
-    return events
-      .filter((event) =>
-        event.kind === "live_token" ||
-        event.kind === "tool_call_activity" ||
-        event.kind === "reasoning_detail",
+    const sinceCreatedAt = args.sinceCreatedAt ?? 0;
+    const events = (
+      await Promise.all(
+        LIVE_ACTIVITY_EVENT_KINDS.map((kind) =>
+          ctx.db
+            .query("runEvents")
+            .withIndex("by_run_kind_and_created_at", (q) =>
+              q.eq("runId", args.runId).eq("kind", kind).gte("createdAt", sinceCreatedAt),
+            )
+            .collect(),
+        ),
       )
-      .map((event) => ({
-        id: String(event._id),
-        kind: event.kind,
-        stage: event.stage,
-        participantModelId: event.participantModelId,
-        payload: event.payload ?? null,
-        createdAt: event.createdAt,
-      }));
+    )
+      .flat()
+      .sort((a, b) => {
+        if (a.createdAt !== b.createdAt) {
+          return a.createdAt - b.createdAt;
+        }
+        return String(a._id).localeCompare(String(b._id));
+      });
+
+    return mapLiveActivityEvents(events);
   },
 });
 
@@ -896,9 +992,8 @@ export const search = query({
       })) as any;
 
     try {
-      const searchQuery = buildSearchQuery(args.categoryId);
       const fetchSearchPage = (nextPaginationOpts: { numItems: number; cursor: string | null }) =>
-        searchQuery.paginate(nextPaginationOpts);
+        buildSearchQuery(args.categoryId).paginate(nextPaginationOpts);
       const page = await collectVisibleRunSearchDocsPage(
         ctx,
         {
@@ -908,11 +1003,13 @@ export const search = query({
         fetchSearchPage,
       );
       const [filteredMetrics, allCategoryMetrics] = await Promise.all([
-        collectVisibleRunSearchDocMetrics(ctx, args, fetchSearchPage),
+        collectVisibleRunSearchDocMetrics(ctx, args, () =>
+          buildSearchQuery(args.categoryId).collect(),
+        ),
         collectVisibleRunSearchDocMetrics(
           ctx,
           { ...args, categoryId: undefined },
-          (nextPaginationOpts) => buildSearchQuery(undefined).paginate(nextPaginationOpts),
+          () => buildSearchQuery(undefined).collect(),
         ),
       ]);
 
@@ -927,7 +1024,7 @@ export const search = query({
         throw error;
       }
 
-      const baseQuery = buildRunSearchDocsBaseQuery(ctx, args);
+      const buildBaseQuery = () => buildRunSearchDocsBaseQuery(ctx, args);
       const extraFilter = (searchDoc: Doc<"runSearchDocs">) =>
         searchDoc.promptSearchText.includes(normalizedQuery);
       const page = await collectVisibleRunSearchDocsPage(
@@ -936,23 +1033,23 @@ export const search = query({
           ...args,
           paginationOpts,
         },
-        (nextPaginationOpts) => baseQuery.order("desc").paginate(nextPaginationOpts),
+        (nextPaginationOpts) => buildBaseQuery().order("desc").paginate(nextPaginationOpts),
         { extraFilter },
       );
       const [filteredMetrics, allCategoryMetrics] = await Promise.all([
         collectVisibleRunSearchDocMetrics(
           ctx,
           args,
-          (nextPaginationOpts) => baseQuery.order("desc").paginate(nextPaginationOpts),
+          () => buildBaseQuery().order("desc").collect(),
           { extraFilter },
         ),
         collectVisibleRunSearchDocMetrics(
           ctx,
           { ...args, categoryId: undefined },
-          (nextPaginationOpts) =>
+          () =>
             buildRunSearchDocsBaseQuery(ctx, args, { ignoreCategory: true })
               .order("desc")
-              .paginate(nextPaginationOpts),
+              .collect(),
           { extraFilter },
         ),
       ]);
@@ -1567,55 +1664,98 @@ export const submitHumanCritiques = mutation({
   },
 });
 
-export const getRunBundleInternal = internalQuery({
+export const getGenerateBundleInternal = internalQuery({
   args: { runId: v.id("runs") },
   returns: v.any(),
   handler: async (ctx, args) => {
-    const run = await ctx.db.get(args.runId);
-    if (!run) {
-      throw new ConvexError("Run not found");
-    }
-    const [participants, events, project, projectPolicy, orgPolicy, vaultEntry, exaEntry] = await Promise.all([
-      ctx.db.query("runParticipants").withIndex("by_run", (q) => q.eq("runId", run._id)).collect(),
+    const execution = await loadExecutionContext(ctx, args.runId);
+    const participants = await ctx.db
+      .query("runParticipants")
+      .withIndex("by_run", (q) => q.eq("runId", args.runId))
+      .collect();
+
+    return {
+      run: execution.run,
+      participants,
+      policy: execution.policy,
+      vaultEntry: execution.vaultEntry,
+      exaEntry: execution.exaEntry,
+    };
+  },
+});
+
+export const getCritiqueBundleInternal = internalQuery({
+  args: { runId: v.id("runs") },
+  returns: v.any(),
+  handler: async (ctx, args) => {
+    const execution = await loadExecutionContext(ctx, args.runId);
+    const participants = await ctx.db
+      .query("runParticipants")
+      .withIndex("by_run", (q) => q.eq("runId", args.runId))
+      .collect();
+
+    return {
+      run: execution.run,
+      participants,
+      policy: execution.policy,
+      vaultEntry: execution.vaultEntry,
+    };
+  },
+});
+
+export const getReviseBundleInternal = internalQuery({
+  args: { runId: v.id("runs") },
+  returns: v.any(),
+  handler: async (ctx, args) => {
+    const execution = await loadExecutionContext(ctx, args.runId);
+    const [participants, humanCritiqueEvents, generateTraceEvents] = await Promise.all([
+      ctx.db.query("runParticipants").withIndex("by_run", (q) => q.eq("runId", args.runId)).collect(),
       ctx.db
         .query("runEvents")
-        .withIndex("by_run_and_created_at", (q) => q.eq("runId", run._id))
+        .withIndex("by_run_stage_kind_and_created_at", (q) =>
+          q
+            .eq("runId", execution.run._id)
+            .eq("stage", "human_critique")
+            .eq("kind", "human_critique_submitted"),
+        )
         .collect(),
-      ctx.db.get(run.projectId),
       ctx.db
-        .query("providerPolicies")
-        .withIndex("by_organization_and_project", (q) =>
-          q.eq("organizationId", run.organizationId).eq("projectId", run.projectId),
+        .query("runEvents")
+        .withIndex("by_run_stage_kind_and_created_at", (q) =>
+          q
+            .eq("runId", execution.run._id)
+            .eq("stage", "generate")
+            .eq("kind", "web_stage_trace"),
         )
-        .unique(),
-      ctx.db
-        .query("providerPolicies")
-        .withIndex("by_organization_and_project", (q) =>
-          q.eq("organizationId", run.organizationId).eq("projectId", undefined),
-        )
-        .unique(),
-      ctx.db
-        .query("providerVaultEntries")
-        .withIndex("by_user_and_provider", (q) =>
-          q.eq("userId", run.ownerUserId).eq("provider", "openrouter"),
-        )
-        .unique(),
-      ctx.db
-        .query("providerVaultEntries")
-        .withIndex("by_user_and_provider", (q) =>
-          q.eq("userId", run.ownerUserId).eq("provider", "exa"),
-        )
-        .unique(),
+        .collect(),
     ]);
 
     return {
-      run,
+      run: execution.run,
       participants,
-      events,
-      project,
-      policy: projectPolicy ?? orgPolicy,
-      vaultEntry,
-      exaEntry,
+      humanCritiqueEvents,
+      generateTraceEvents,
+      policy: execution.policy,
+      vaultEntry: execution.vaultEntry,
+      exaEntry: execution.exaEntry,
+    };
+  },
+});
+
+export const getVoteBundleInternal = internalQuery({
+  args: { runId: v.id("runs") },
+  returns: v.any(),
+  handler: async (ctx, args) => {
+    const execution = await loadExecutionContext(ctx, args.runId);
+    const participants = await ctx.db
+      .query("runParticipants")
+      .withIndex("by_run", (q) => q.eq("runId", args.runId))
+      .collect();
+
+    return {
+      run: execution.run,
+      participants,
+      vaultEntry: execution.vaultEntry,
     };
   },
 });
@@ -1811,20 +1951,19 @@ export const appendReasoningDetailsInternal = internalMutation({
   },
   returns: v.null(),
   handler: async (ctx, args) => {
-    for (const detail of args.details) {
-      await ctx.db.insert("runEvents", {
-        runId: args.runId,
-        stage: args.stage,
-        kind: "reasoning_detail",
-        participantModelId: args.participantModelId,
-        message: `${args.participantModelId} ${args.stage} reasoning detail`,
-        payload: {
-          ...detail,
-          turn: args.turn,
-        },
-        createdAt: args.createdAt,
-      });
-    }
+    await ctx.db.insert("runEvents", {
+      runId: args.runId,
+      stage: args.stage,
+      kind: "reasoning_detail",
+      participantModelId: args.participantModelId,
+      message: `${args.participantModelId} ${args.stage} reasoning detail batch`,
+      payload: {
+        batch: true,
+        turn: args.turn,
+        details: args.details,
+      },
+      createdAt: args.createdAt,
+    });
     return null;
   },
 });
@@ -1843,19 +1982,31 @@ export const updateRunForStageInternal = internalMutation({
   returns: v.null(),
   handler: async (ctx, args) => {
     const now = Date.now();
+    const run = await ctx.db.get(args.runId);
+    if (!run) {
+      throw new ConvexError("Run not found");
+    }
     const existing = await ctx.db
       .query("runStageStates")
       .withIndex("by_run_and_stage", (q) => q.eq("runId", args.runId).eq("stage", args.stage))
       .unique();
 
     if (existing) {
-      await ctx.db.patch(existing._id, {
-        status: args.status,
-        eligibleCount: args.eligibleCount,
-        completedCount: args.completedCount,
-        readyCount: args.readyCount,
-        completedAt: args.completedAt,
-      });
+      if (
+        existing.status !== args.status ||
+        existing.eligibleCount !== args.eligibleCount ||
+        existing.completedCount !== args.completedCount ||
+        existing.readyCount !== args.readyCount ||
+        existing.completedAt !== args.completedAt
+      ) {
+        await ctx.db.patch(existing._id, {
+          status: args.status,
+          eligibleCount: args.eligibleCount,
+          completedCount: args.completedCount,
+          readyCount: args.readyCount,
+          completedAt: args.completedAt,
+        });
+      }
     } else {
       await ctx.db.insert("runStageStates", {
         runId: args.runId,
@@ -1869,17 +2020,23 @@ export const updateRunForStageInternal = internalMutation({
       });
     }
 
-    await ctx.db.patch(args.runId, {
-      status: args.status,
-      currentStep: args.currentStep,
-      checkpointStage: args.stage,
-      updatedAt: now,
-    });
+    if (
+      run.status !== args.status ||
+      run.currentStep !== args.currentStep ||
+      run.checkpointStage !== args.stage
+    ) {
+      await ctx.db.patch(args.runId, {
+        status: args.status,
+        currentStep: args.currentStep,
+        checkpointStage: args.stage,
+        updatedAt: now,
+      });
+    }
     const searchDoc = await ctx.db
       .query("runSearchDocs")
       .withIndex("by_run", (q) => q.eq("runId", args.runId))
       .unique();
-    if (searchDoc) {
+    if (searchDoc && searchDoc.status !== args.status) {
       await ctx.db.patch(searchDoc._id, { status: args.status });
     }
 
@@ -2023,13 +2180,10 @@ export const recordParticipantStageSuccessInternal = internalMutation({
       });
     }
 
-    const participants = await ctx.db
-      .query("runParticipants")
-      .withIndex("by_run", (q) => q.eq("runId", args.runId))
-      .collect();
+    const deltas = participantCounterDeltas(participant.status, "complete");
     await ctx.db.patch(args.runId, {
-      completedParticipantCount: participants.filter((entry) => entry.status === "complete").length,
-      failedParticipantCount: participants.filter((entry) => entry.status === "failed").length,
+      completedParticipantCount: Math.max(0, run.completedParticipantCount + deltas.completedDelta),
+      failedParticipantCount: Math.max(0, run.failedParticipantCount + deltas.failedDelta),
       updatedAt: args.completedAt,
     });
 
@@ -2063,7 +2217,8 @@ export const recordParticipantStageFailureInternal = internalMutation({
   returns: v.null(),
   handler: async (ctx, args) => {
     const participant = await ctx.db.get(args.participantId);
-    if (!participant || participant.runId !== args.runId) {
+    const run = await ctx.db.get(args.runId);
+    if (!participant || participant.runId !== args.runId || !run) {
       throw new ConvexError("Participant not found");
     }
 
@@ -2074,13 +2229,10 @@ export const recordParticipantStageFailureInternal = internalMutation({
       error: args.message,
     });
 
-    const participants = await ctx.db
-      .query("runParticipants")
-      .withIndex("by_run", (q) => q.eq("runId", args.runId))
-      .collect();
+    const deltas = participantCounterDeltas(participant.status, "failed");
     await ctx.db.patch(args.runId, {
-      completedParticipantCount: participants.filter((entry) => entry.status === "complete").length,
-      failedParticipantCount: participants.filter((entry) => entry.status === "failed").length,
+      completedParticipantCount: Math.max(0, run.completedParticipantCount + deltas.completedDelta),
+      failedParticipantCount: Math.max(0, run.failedParticipantCount + deltas.failedDelta),
       updatedAt: args.completedAt,
     });
 
@@ -2152,27 +2304,28 @@ export const finalizeRunOutcomeInternal = internalMutation({
       throw new ConvexError("Run not found");
     }
 
-    const participants = await ctx.db
-      .query("runParticipants")
-      .withIndex("by_run", (q) => q.eq("runId", args.runId))
-      .collect();
-
-    await ctx.db.patch(args.runId, {
-      status: args.status,
-      currentStep: args.currentStep,
-      finalWinnerModelId: args.finalWinnerModelId,
-      finalWinnerName: args.finalWinnerName,
-      error: args.error,
-      completedParticipantCount: participants.filter((participant) => participant.status === "complete").length,
-      failedParticipantCount: participants.filter((participant) => participant.status === "failed").length,
-      updatedAt: now,
-    });
+    if (
+      run.status !== args.status ||
+      run.currentStep !== args.currentStep ||
+      run.finalWinnerModelId !== args.finalWinnerModelId ||
+      run.finalWinnerName !== args.finalWinnerName ||
+      run.error !== args.error
+    ) {
+      await ctx.db.patch(args.runId, {
+        status: args.status,
+        currentStep: args.currentStep,
+        finalWinnerModelId: args.finalWinnerModelId,
+        finalWinnerName: args.finalWinnerName,
+        error: args.error,
+        updatedAt: now,
+      });
+    }
 
     const searchDoc = await ctx.db
       .query("runSearchDocs")
       .withIndex("by_run", (q) => q.eq("runId", args.runId))
       .unique();
-    if (searchDoc) {
+    if (searchDoc && searchDoc.status !== args.status) {
       await ctx.db.patch(searchDoc._id, { status: args.status });
     }
     await settleRunAccountingAndStats(
@@ -2184,8 +2337,6 @@ export const finalizeRunOutcomeInternal = internalMutation({
         finalWinnerModelId: args.finalWinnerModelId,
         finalWinnerName: args.finalWinnerName,
         error: args.error,
-        completedParticipantCount: participants.filter((participant) => participant.status === "complete").length,
-        failedParticipantCount: participants.filter((participant) => participant.status === "failed").length,
         updatedAt: now,
       },
       args.status,

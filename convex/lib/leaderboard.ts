@@ -1,5 +1,6 @@
 import type {
   BenchmarkRun,
+  CritiqueVoteResult,
   LeaderboardData,
   LeaderboardEntry,
   LeaderboardVotePhase,
@@ -25,7 +26,19 @@ function rankToPercentile(rank: number, participantCount: number) {
   return (participantCount - rank) / (participantCount - 1);
 }
 
-function getPhaseRankings(run: BenchmarkRun, votePhase: LeaderboardVotePhase): Ranking[] {
+export interface LeaderboardRunRecord {
+  categoryId: string;
+  status: BenchmarkRun["status"];
+  updatedAt: string;
+  ideaModelIds: string[];
+  revisedIdeaModelIds: string[];
+  critiqueVotes: CritiqueVoteResult[];
+  finalRankings: Ranking[];
+  humanCritiqueCount: number;
+  completedModelCount: number;
+}
+
+function getPhaseRankings(run: Pick<LeaderboardRunRecord, "critiqueVotes" | "finalRankings">, votePhase: LeaderboardVotePhase): Ranking[] {
   if (votePhase === "initial") {
     return run.critiqueVotes
       .filter((vote) => vote.rankings.length > 0)
@@ -38,11 +51,14 @@ function getPhaseRankings(run: BenchmarkRun, votePhase: LeaderboardVotePhase): R
   return run.finalRankings.filter((ranking) => ranking.rankings.length > 0);
 }
 
-function getPhaseCandidateIds(run: BenchmarkRun, votePhase: LeaderboardVotePhase): string[] {
-  const phaseIdeas = votePhase === "initial" ? run.ideas : run.revisedIdeas;
+function getPhaseCandidateIds(
+  run: Pick<LeaderboardRunRecord, "ideaModelIds" | "revisedIdeaModelIds" | "critiqueVotes" | "finalRankings">,
+  votePhase: LeaderboardVotePhase,
+): string[] {
+  const phaseIdeaModelIds = votePhase === "initial" ? run.ideaModelIds : run.revisedIdeaModelIds;
   return Array.from(
     new Set([
-      ...phaseIdeas.map((idea) => idea.modelId),
+      ...phaseIdeaModelIds,
       ...getPhaseRankings(run, votePhase).flatMap((ranking) =>
         ranking.rankings.map((entry) => entry.modelId),
       ),
@@ -50,12 +66,15 @@ function getPhaseCandidateIds(run: BenchmarkRun, votePhase: LeaderboardVotePhase
   );
 }
 
-function isRankedRun(run: BenchmarkRun, votePhase: LeaderboardVotePhase) {
+function isRankedRun(
+  run: Pick<LeaderboardRunRecord, "ideaModelIds" | "revisedIdeaModelIds" | "critiqueVotes" | "finalRankings">,
+  votePhase: LeaderboardVotePhase,
+) {
   return getPhaseRankings(run, votePhase).length > 0 && getPhaseCandidateIds(run, votePhase).length > 1;
 }
 
 export function buildLeaderboardEntries(
-  runs: BenchmarkRun[],
+  runs: LeaderboardRunRecord[],
   votePhase: LeaderboardVotePhase,
 ): LeaderboardEntry[] {
   const stats = new Map<
@@ -193,8 +212,8 @@ export function buildLeaderboardEntries(
     );
 }
 
-export function buildLeaderboardData(
-  runs: BenchmarkRun[],
+export function buildLeaderboardDataFromRecords(
+  runs: LeaderboardRunRecord[],
   votePhase: LeaderboardVotePhase = "final",
 ): LeaderboardData {
   const completedRuns = runs.filter((run) => run.status === "complete" || run.status === "partial");
@@ -209,22 +228,20 @@ export function buildLeaderboardData(
       runs: categoryRuns.length,
       ideas: categoryRuns.reduce(
         (sum, run) =>
-          sum + (votePhase === "initial" ? run.ideas.length : run.ideas.length + run.revisedIdeas.length),
+          sum +
+          (votePhase === "initial"
+            ? run.ideaModelIds.length
+            : run.ideaModelIds.length + run.revisedIdeaModelIds.length),
         0,
       ),
       critiques: categoryRuns.reduce(
         (sum, run) =>
           sum +
           run.critiqueVotes.reduce((voteSum, vote) => voteSum + vote.critiques.length, 0) +
-          run.humanCritiques.length,
+          run.humanCritiqueCount,
         0,
       ),
-      completedModels: categoryRuns.reduce(
-        (sum, run) =>
-          sum +
-          Object.values(run.modelStates).filter((state) => state.status === "complete").length,
-        0,
-      ),
+      completedModels: categoryRuns.reduce((sum, run) => sum + run.completedModelCount, 0),
     };
   }
 
@@ -237,22 +254,40 @@ export function buildLeaderboardData(
       runs: rankedRuns.length,
       ideas: rankedRuns.reduce(
         (sum, run) =>
-          sum + (votePhase === "initial" ? run.ideas.length : run.ideas.length + run.revisedIdeas.length),
+          sum +
+          (votePhase === "initial"
+            ? run.ideaModelIds.length
+            : run.ideaModelIds.length + run.revisedIdeaModelIds.length),
         0,
       ),
       critiques: rankedRuns.reduce(
         (sum, run) =>
           sum +
           run.critiqueVotes.reduce((voteSum, vote) => voteSum + vote.critiques.length, 0) +
-          run.humanCritiques.length,
+          run.humanCritiqueCount,
         0,
       ),
-      completedModels: rankedRuns.reduce(
-        (sum, run) =>
-          sum +
-          Object.values(run.modelStates).filter((state) => state.status === "complete").length,
-        0,
-      ),
+      completedModels: rankedRuns.reduce((sum, run) => sum + run.completedModelCount, 0),
     },
   };
+}
+
+export function buildLeaderboardData(
+  runs: BenchmarkRun[],
+  votePhase: LeaderboardVotePhase = "final",
+): LeaderboardData {
+  return buildLeaderboardDataFromRecords(
+    runs.map((run) => ({
+      categoryId: run.categoryId,
+      status: run.status,
+      updatedAt: run.updatedAt,
+      ideaModelIds: run.ideas.map((idea) => idea.modelId),
+      revisedIdeaModelIds: run.revisedIdeas.map((idea) => idea.modelId),
+      critiqueVotes: run.critiqueVotes,
+      finalRankings: run.finalRankings,
+      humanCritiqueCount: run.humanCritiques.length,
+      completedModelCount: Object.values(run.modelStates).filter((state) => state.status === "complete").length,
+    })),
+    votePhase,
+  );
 }

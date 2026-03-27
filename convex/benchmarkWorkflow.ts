@@ -282,7 +282,7 @@ export const runBenchmarkWorkflow = workflow.define({
         finalWinnerName: winningModel?.modelName,
         error: undefined,
       });
-      await step.runMutation(internal.leaderboards.rebuildSnapshotsInternal, {
+      await step.runAction(internal.leaderboards.rebuildSnapshotsInternal, {
         runId: args.runId,
       });
 
