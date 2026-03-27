@@ -93,6 +93,7 @@ export const runBenchmarkWorkflow = workflow.define({
   },
   returns: v.null(),
   handler: async (step, args): Promise<null> => {
+    let benchmarkCompleted = false;
     try {
       let bundle = await step.runQuery(internal.runs.getWorkflowBundleInternal, { runId: args.runId });
       if (bundle.run.cancellationRequested || bundle.run.status === "canceled") {
@@ -282,13 +283,25 @@ export const runBenchmarkWorkflow = workflow.define({
         finalWinnerName: winningModel?.modelName,
         error: undefined,
       });
-      await step.runAction(internal.leaderboards.rebuildSnapshotsInternal, {
+      benchmarkCompleted = true;
+      await step.runAction(internal.leaderboards.rebuildSnapshotsSafelyInternal, {
         runId: args.runId,
       });
 
       return null;
     } catch (error) {
       const message = error instanceof Error ? error.message : "Benchmark workflow failed";
+      if (benchmarkCompleted) {
+        await step.runMutation(internal.runs.recordPostCompletionIssueInternal, {
+          runId: args.runId,
+          kind: "benchmark_post_completion_failure",
+          message,
+          payload: {
+            source: "benchmarkWorkflow",
+          },
+        });
+        return null;
+      }
       await step.runMutation(internal.runs.finalizeRunOutcomeInternal, {
         runId: args.runId,
         status: "dead_lettered",

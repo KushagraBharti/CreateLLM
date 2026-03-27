@@ -232,6 +232,7 @@ export default defineSchema({
     minimumSuccessfulModels: v.number(),
     completedParticipantCount: v.number(),
     failedParticipantCount: v.number(),
+    humanCritiqueCount: v.optional(v.number()),
     pauseRequested: v.boolean(),
     cancellationRequested: v.boolean(),
     error: v.optional(v.string()),

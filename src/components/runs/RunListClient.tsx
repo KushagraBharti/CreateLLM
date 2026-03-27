@@ -371,6 +371,12 @@ export default function RunListClient({
                       <span>
                         {run.completedModelCount}/{run.modelCount} models completed
                       </span>
+                      {run.failedModelCount > 0 ? (
+                        <>
+                          <span className="hidden h-1 w-1 rounded-full bg-border sm:block" />
+                          <span>{run.failedModelCount} failed</span>
+                        </>
+                      ) : null}
                       <span className="hidden h-1 w-1 rounded-full bg-border sm:block" />
                       <span>{formatShortDate(run.timestamp)}</span>
                       {mode === "runs" && isActiveStatus(run.status) ? (

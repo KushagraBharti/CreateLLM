@@ -250,8 +250,16 @@ describe("buildLeaderboardData", () => {
 
     expect(data.votePhase).toBe("final");
     expect(data.totals.runs).toBe(1);
+    expect(data.totals.ideas).toBe(2);
     expect(data.global[0]?.modelId).toBe("b");
     expect(data.global[0]?.rating).toBeGreaterThan(data.global[1]?.rating ?? 0);
+  });
+
+  it("counts initial and final ideas within their own phase", () => {
+    const run = makeRun();
+
+    expect(buildLeaderboardData([run], "initial").totals.ideas).toBe(run.ideas.length);
+    expect(buildLeaderboardData([run], "final").totals.ideas).toBe(run.revisedIdeas.length);
   });
 
   it("only counts ranked runs for the active vote phase", () => {
@@ -269,6 +277,22 @@ describe("buildLeaderboardData", () => {
 
     expect(data.totals.runs).toBe(1);
     expect(data.categoryTotals.venture?.runs).toBe(1);
+  });
+
+  it("includes repaired-style dead lettered runs if they contain valid ranked outcomes", () => {
+    const data = buildLeaderboardData(
+      [
+        makeRun({
+          status: "dead_lettered",
+          currentStep: "post-completion rebuild failed",
+          error: "snapshot rebuild failed",
+        }),
+      ],
+      "final",
+    );
+
+    expect(data.totals.runs).toBe(1);
+    expect(data.global[0]?.modelId).toBe("b");
   });
 
   it("rescales the full history through pairwise transitivity", () => {

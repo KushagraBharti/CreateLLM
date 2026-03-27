@@ -318,6 +318,28 @@ function isRankedRun(
   );
 }
 
+function isTerminalLeaderboardStatus(status: BenchmarkRun["status"]) {
+  return status === "complete" || status === "partial" || status === "dead_lettered";
+}
+
+function hasCompletedBenchmarkOutcome(
+  run: Pick<
+    LeaderboardRunRecord,
+    "ideaModelIds" | "revisedIdeaModelIds" | "critiqueVotes" | "finalRankings"
+  >,
+) {
+  return isRankedRun(run, "final");
+}
+
+function isLeaderboardEligibleRun(
+  run: Pick<
+    LeaderboardRunRecord,
+    "status" | "ideaModelIds" | "revisedIdeaModelIds" | "critiqueVotes" | "finalRankings"
+  >,
+) {
+  return isTerminalLeaderboardStatus(run.status) && hasCompletedBenchmarkOutcome(run);
+}
+
 function getWinnerId(rankings: Ranking[], candidateIds: string[]) {
   const perModel = new Map<string, { ranks: number[]; scores: number[] }>();
 
@@ -1278,7 +1300,7 @@ type ComputedLeaderboardState = {
 
 function computeLeaderboardState(runs: LeaderboardRunRecord[]): ComputedLeaderboardState {
   const eligibleRuns = sortRunsChronologically(
-    runs.filter((run) => run.status === "complete" || run.status === "partial"),
+    runs.filter((run) => isLeaderboardEligibleRun(run)),
   );
   const globalInitial = createStateBundle("initial");
   const globalFinal = createStateBundle("final");
@@ -1326,9 +1348,7 @@ function buildTotals(
     ideas: runs.reduce(
       (sum, run) =>
         sum +
-        (votePhase === "initial"
-          ? run.ideaModelIds.length
-          : run.ideaModelIds.length + run.revisedIdeaModelIds.length),
+        (votePhase === "initial" ? run.ideaModelIds.length : run.revisedIdeaModelIds.length),
       0,
     ),
     critiques: runs.reduce(
@@ -1346,7 +1366,7 @@ export function buildLeaderboardDataFromRecords(
   runs: LeaderboardRunRecord[],
   votePhase: LeaderboardVotePhase = "final",
 ): LeaderboardData {
-  const completedRuns = runs.filter((run) => run.status === "complete" || run.status === "partial");
+  const completedRuns = runs.filter((run) => isLeaderboardEligibleRun(run));
   const rankedRuns = completedRuns.filter((run) => isRankedRun(run, votePhase));
   const computed = computeLeaderboardState(completedRuns);
   const globalBundle = votePhase === "initial" ? computed.globalInitial : computed.globalFinal;
@@ -1423,9 +1443,7 @@ export function buildLeaderboardData(
       critiqueVotes: run.critiqueVotes,
       finalRankings: run.finalRankings,
       humanCritiqueCount: run.humanCritiques.length,
-      completedModelCount: Object.values(run.modelStates).filter(
-        (state) => state.status === "complete",
-      ).length,
+      completedModelCount: run.finalRankings.length,
     })),
     votePhase,
   );

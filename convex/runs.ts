@@ -4,6 +4,7 @@ import { ConvexError, v } from "convex/values";
 import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
 import {
+  internalAction,
   internalMutation,
   internalQuery,
   MutationCtx,
@@ -13,7 +14,7 @@ import {
 } from "./_generated/server";
 import { workflow } from "./workflow";
 import { MODEL_SELECTION_LIMITS, resolveSelectedModels } from "@/lib/models";
-import type { BenchmarkRunSummary, HumanCritiqueEntry } from "@/types";
+import type { BenchmarkRunSummary, HumanCritiqueEntry, RunCheckpointStage } from "@/types";
 import { requireAuthUser, requireProjectAccess } from "./lib/auth";
 import { getEffectiveProviderPolicy, isModelAllowedByPolicy } from "./lib/policies";
 import {
@@ -147,6 +148,65 @@ function isCountedCompleteStatus(status: Doc<"runParticipants">["status"]) {
 
 function isCountedFailedStatus(status: Doc<"runParticipants">["status"]) {
   return status === "failed" ? 1 : 0;
+}
+
+function participantReachedBenchmarkCompletion(stage: RunCheckpointStage) {
+  return stage === "vote";
+}
+
+function hasValidFinalOutcome(run: Doc<"runs">, participants: Doc<"runParticipants">[]) {
+  const successfulFinalists = participants.filter(
+    (participant) =>
+      participant.finalRanking &&
+      participant.status !== "failed" &&
+      participant.status !== "canceled",
+  );
+  return successfulFinalists.length >= run.minimumSuccessfulModels;
+}
+
+function inferWinnerFromParticipants(
+  run: Doc<"runs">,
+  participants: Doc<"runParticipants">[],
+) {
+  const stats = new Map<string, { rankTotal: number; scoreTotal: number; count: number }>();
+
+  for (const participant of participants) {
+    const ranking = participant.finalRanking as { rankings?: Array<{ modelId: string; rank: number; score: number }> } | undefined;
+    if (!ranking?.rankings?.length) {
+      continue;
+    }
+    for (const entry of ranking.rankings) {
+      const current = stats.get(entry.modelId) ?? { rankTotal: 0, scoreTotal: 0, count: 0 };
+      current.rankTotal += entry.rank;
+      current.scoreTotal += entry.score;
+      current.count += 1;
+      stats.set(entry.modelId, current);
+    }
+  }
+
+  let winnerId: string | undefined;
+  let bestAverageRank = Number.POSITIVE_INFINITY;
+  let bestAverageScore = Number.NEGATIVE_INFINITY;
+
+  for (const [modelId, current] of stats) {
+    const averageRank = current.rankTotal / current.count;
+    const averageScore = current.scoreTotal / current.count;
+    if (
+      averageRank < bestAverageRank ||
+      (averageRank === bestAverageRank && averageScore > bestAverageScore)
+    ) {
+      winnerId = modelId;
+      bestAverageRank = averageRank;
+      bestAverageScore = averageScore;
+    }
+  }
+
+  return {
+    modelId: winnerId,
+    modelName: winnerId
+      ? (run.selectedModels.find((entry) => entry.id === winnerId)?.name ?? winnerId)
+      : undefined,
+  };
 }
 
 function matchesStatusFilters(
@@ -1581,6 +1641,7 @@ export const create = mutation({
       minimumSuccessfulModels: minimumSuccessfulModels(selectedModels.length),
       completedParticipantCount: 0,
       failedParticipantCount: 0,
+      humanCritiqueCount: 0,
       pauseRequested: false,
       cancellationRequested: false,
       error: undefined,
@@ -2098,6 +2159,10 @@ export const submitHumanCritiques = mutation({
       message: `Submitted ${critiques.length} human critiques`,
       payload: { critiques },
       createdAt: now,
+    });
+    await ctx.db.patch(run._id, {
+      humanCritiqueCount: (run.humanCritiqueCount ?? 0) + critiques.length,
+      updatedAt: now,
     });
     await ctx.db.insert("auditLogs", {
       actorUserId: user._id,
@@ -2767,7 +2832,7 @@ export const recordParticipantStageSuccessInternal = internalMutation({
     await ctx.db.patch(args.participantId, {
       ...stagePatch,
       stage: args.stage,
-      status: "complete",
+      status: participantReachedBenchmarkCompletion(args.stage) ? "complete" : "queued",
       completedAt: args.completedAt,
       latencyMs: args.latencyMs,
       inputTokens: args.inputTokens,
@@ -2791,7 +2856,9 @@ export const recordParticipantStageSuccessInternal = internalMutation({
       });
     }
 
-    const deltas = participantCounterDeltas(participant.status, "complete");
+    const deltas = participantReachedBenchmarkCompletion(args.stage)
+      ? participantCounterDeltas(participant.status, "complete")
+      : { completedDelta: 0, failedDelta: 0 };
     await ctx.db.patch(args.runId, {
       completedParticipantCount: Math.max(0, run.completedParticipantCount + deltas.completedDelta),
       failedParticipantCount: Math.max(0, run.failedParticipantCount + deltas.failedDelta),
@@ -2987,5 +3054,289 @@ export const finalizeRunOutcomeInternal = internalMutation({
     }
 
     return null;
+  },
+});
+
+export const recordPostCompletionIssueInternal = internalMutation({
+  args: {
+    runId: v.id("runs"),
+    kind: v.string(),
+    message: v.string(),
+    payload: v.optional(v.any()),
+  },
+  returns: v.null(),
+  handler: async (ctx, args) => {
+    const run = await ctx.db.get(args.runId);
+    if (!run) {
+      return null;
+    }
+
+    const now = Date.now();
+    await ctx.db.insert("runEvents", {
+      runId: args.runId,
+      stage: "complete",
+      kind: args.kind,
+      participantModelId: undefined,
+      message: args.message,
+      payload: args.payload,
+      createdAt: now,
+    });
+    await ctx.db.insert("auditLogs", {
+      actorUserId: run.ownerUserId,
+      organizationId: run.organizationId,
+      projectId: run.projectId,
+      action: "run.post_completion_issue_recorded",
+      resourceType: "run",
+      resourceId: String(args.runId),
+      metadata: {
+        kind: args.kind,
+        message: args.message,
+      },
+      createdAt: now,
+    });
+    return null;
+  },
+});
+
+export const getHistoricalRepairPageInternal = internalQuery({
+  args: {
+    paginationOpts: paginationOptsValidator,
+  },
+  returns: v.any(),
+  handler: async (ctx, args) => {
+    const page = await ctx.db
+      .query("runs")
+      .withIndex("by_created_at")
+      .order("asc")
+      .paginate(args.paginationOpts);
+
+    const repairs: Array<{
+      runId: Id<"runs">;
+      completedParticipantCount: number;
+      failedParticipantCount: number;
+      humanCritiqueCount: number;
+      nextStatus?: Doc<"runs">["status"];
+      nextCurrentStep?: string;
+      nextError?: string;
+      finalWinnerModelId?: string;
+      finalWinnerName?: string;
+    }> = [];
+
+    for (const run of page.page) {
+      const participants = await ctx.db
+        .query("runParticipants")
+        .withIndex("by_run", (q) => q.eq("runId", run._id))
+        .collect();
+
+      const completedParticipantCount = participants.filter((participant) => participant.finalRanking).length;
+      const failedParticipantCount = participants.filter((participant) => participant.status === "failed").length;
+
+      let humanCritiqueCount = run.humanCritiqueCount ?? 0;
+      if (run.humanCritiqueCount == null) {
+        const critiqueEvents = await ctx.db
+          .query("runEvents")
+          .withIndex("by_run_kind_and_created_at", (q) =>
+            q.eq("runId", run._id).eq("kind", "human_critique_submitted"),
+          )
+          .collect();
+        humanCritiqueCount = critiqueEvents.reduce(
+          (sum, event) =>
+            sum + (((event.payload as { critiques?: unknown[] } | undefined)?.critiques?.length) ?? 0),
+          0,
+        );
+      }
+
+      const validFinalOutcome = hasValidFinalOutcome(run, participants);
+      const winner = validFinalOutcome ? inferWinnerFromParticipants(run, participants) : { modelId: undefined, modelName: undefined };
+      const nextStatus =
+        validFinalOutcome && (run.status === "dead_lettered" || run.status === "partial")
+          ? "complete"
+          : undefined;
+
+      const needsRepair =
+        run.completedParticipantCount !== completedParticipantCount ||
+        run.failedParticipantCount !== failedParticipantCount ||
+        run.humanCritiqueCount !== humanCritiqueCount ||
+        nextStatus !== undefined ||
+        (validFinalOutcome &&
+          (!run.finalWinnerModelId || !run.finalWinnerName) &&
+          Boolean(winner.modelId));
+
+      if (!needsRepair) {
+        continue;
+      }
+
+      repairs.push({
+        runId: run._id,
+        completedParticipantCount,
+        failedParticipantCount,
+        humanCritiqueCount,
+        nextStatus,
+        nextCurrentStep: nextStatus ? "Benchmark complete!" : undefined,
+        nextError: nextStatus ? undefined : undefined,
+        finalWinnerModelId: winner.modelId,
+        finalWinnerName: winner.modelName,
+      });
+    }
+
+    return {
+      page: repairs,
+      isDone: page.isDone,
+      continueCursor: page.continueCursor,
+    };
+  },
+});
+
+export const applyHistoricalRepairBatchInternal = internalMutation({
+  args: {
+    repairs: v.array(v.any()),
+  },
+  returns: v.object({
+    patchedRuns: v.number(),
+    statusRepairs: v.number(),
+  }),
+  handler: async (ctx, args) => {
+    let patchedRuns = 0;
+    let statusRepairs = 0;
+
+    for (const rawRepair of args.repairs as Array<{
+      runId: Id<"runs">;
+      completedParticipantCount: number;
+      failedParticipantCount: number;
+      humanCritiqueCount: number;
+      nextStatus?: Doc<"runs">["status"];
+      nextCurrentStep?: string;
+      nextError?: string;
+      finalWinnerModelId?: string;
+      finalWinnerName?: string;
+    }>) {
+      const run = await ctx.db.get(rawRepair.runId);
+      if (!run) {
+        continue;
+      }
+
+      const patch: Partial<Doc<"runs">> = {};
+      if (run.completedParticipantCount !== rawRepair.completedParticipantCount) {
+        patch.completedParticipantCount = rawRepair.completedParticipantCount;
+      }
+      if (run.failedParticipantCount !== rawRepair.failedParticipantCount) {
+        patch.failedParticipantCount = rawRepair.failedParticipantCount;
+      }
+      if (run.humanCritiqueCount !== rawRepair.humanCritiqueCount) {
+        patch.humanCritiqueCount = rawRepair.humanCritiqueCount;
+      }
+      if (rawRepair.finalWinnerModelId && run.finalWinnerModelId !== rawRepair.finalWinnerModelId) {
+        patch.finalWinnerModelId = rawRepair.finalWinnerModelId;
+      }
+      if (rawRepair.finalWinnerName && run.finalWinnerName !== rawRepair.finalWinnerName) {
+        patch.finalWinnerName = rawRepair.finalWinnerName;
+      }
+      if (rawRepair.nextStatus && run.status !== rawRepair.nextStatus) {
+        patch.status = rawRepair.nextStatus;
+        patch.currentStep = rawRepair.nextCurrentStep ?? "Benchmark complete!";
+        patch.error = rawRepair.nextError;
+      }
+
+      if (Object.keys(patch).length === 0) {
+        continue;
+      }
+
+      const now = Date.now();
+      patch.updatedAt = Math.max(run.updatedAt, now);
+      await ctx.db.patch(run._id, patch);
+      patchedRuns += 1;
+
+      if (rawRepair.nextStatus && run.status !== rawRepair.nextStatus) {
+        statusRepairs += 1;
+        const searchDoc = await ctx.db
+          .query("runSearchDocs")
+          .withIndex("by_run", (q) => q.eq("runId", run._id))
+          .unique();
+        if (searchDoc && searchDoc.status !== rawRepair.nextStatus) {
+          await ctx.db.patch(searchDoc._id, { status: rawRepair.nextStatus });
+        }
+
+        const dayKey = dayKeyFromTimestamp(run.createdAt);
+        const categoryStats = await ctx.db
+          .query("categoryStatsDaily")
+          .withIndex("by_category_and_day", (q) => q.eq("categoryId", run.categoryId).eq("dayKey", dayKey))
+          .unique();
+        if (categoryStats) {
+          const completedDelta =
+            (rawRepair.nextStatus === "complete" ? 1 : 0) - (run.status === "complete" ? 1 : 0);
+          const partialDelta =
+            (rawRepair.nextStatus === "partial" || rawRepair.nextStatus === "dead_lettered" ? 1 : 0) -
+            (run.status === "partial" || run.status === "dead_lettered" ? 1 : 0);
+          if (completedDelta !== 0 || partialDelta !== 0) {
+            await ctx.db.patch(categoryStats._id, {
+              completedRuns: Math.max(0, categoryStats.completedRuns + completedDelta),
+              partialRuns: Math.max(0, categoryStats.partialRuns + partialDelta),
+              updatedAt: now,
+            });
+          }
+        }
+
+        await ctx.db.insert("runEvents", {
+          runId: run._id,
+          stage: "complete",
+          kind: "run_status_repaired",
+          participantModelId: undefined,
+          message: `Run repaired from ${run.status} to ${rawRepair.nextStatus}`,
+          payload: {
+            previousStatus: run.status,
+            nextStatus: rawRepair.nextStatus,
+          },
+          createdAt: now,
+        });
+      }
+    }
+
+    return { patchedRuns, statusRepairs };
+  },
+});
+
+export const repairHistoricalRunAccountingInternal = internalAction({
+  args: {},
+  returns: v.object({
+    patchedRuns: v.number(),
+    statusRepairs: v.number(),
+  }),
+  handler: async (ctx) => {
+    let cursor: string | null = null;
+    let isDone = false;
+    let patchedRuns = 0;
+    let statusRepairs = 0;
+
+    while (!isDone) {
+      const page: {
+        page: unknown[];
+        isDone: boolean;
+        continueCursor: string | null;
+      } = await ctx.runQuery(internal.runs.getHistoricalRepairPageInternal, {
+        paginationOpts: {
+          numItems: 16,
+          cursor,
+        },
+      });
+
+      if (page.page.length > 0) {
+        const result: { patchedRuns: number; statusRepairs: number } = await ctx.runMutation(
+          internal.runs.applyHistoricalRepairBatchInternal,
+          { repairs: page.page },
+        );
+        patchedRuns += result.patchedRuns;
+        statusRepairs += result.statusRepairs;
+      }
+
+      cursor = page.continueCursor;
+      isDone = page.isDone;
+    }
+
+    await ctx.runAction(internal.leaderboards.rebuildSnapshotsInternal, {});
+
+    return {
+      patchedRuns,
+      statusRepairs,
+    };
   },
 });

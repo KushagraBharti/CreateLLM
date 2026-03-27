@@ -133,13 +133,13 @@ describe("results loaders", () => {
       categoryTotals: {
         venture: {
           runs: 1,
-          ideas: 4,
+          ideas: 2,
           critiques: 1,
           completedModels: 2,
         },
       },
       totals: {
-        ideas: 4,
+        ideas: 2,
         critiques: 1,
         runs: 1,
         completedModels: 2,
@@ -151,7 +151,7 @@ describe("results loaders", () => {
     const stats = await getHomeStats();
 
     expect(fetchLeaderboard).toHaveBeenCalledWith("final");
-    expect(leaderboard.totals.ideas).toBe(4);
+    expect(leaderboard.totals.ideas).toBe(2);
     expect(leaderboard.totals.critiques).toBe(1);
     expect(stats.totalRuns).toBe(1);
   });

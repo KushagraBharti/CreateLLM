@@ -2,7 +2,13 @@ import { paginationOptsValidator } from "convex/server";
 import { v } from "convex/values";
 import type { LeaderboardVotePhase } from "@/types";
 import { internal } from "./_generated/api";
-import { internalAction, internalMutation, internalQuery, query } from "./_generated/server";
+import {
+  internalAction,
+  internalMutation,
+  internalQuery,
+  query,
+  type ActionCtx,
+} from "./_generated/server";
 import { buildLeaderboardDataFromRecords } from "./lib/leaderboard";
 import type { LeaderboardRunRecord } from "./lib/leaderboard";
 
@@ -77,7 +83,7 @@ export const getSnapshotInternal = internalQuery({
 
 export const getRunRecordsPageInternal = internalQuery({
   args: {
-    status: v.union(v.literal("complete"), v.literal("partial")),
+    status: v.union(v.literal("complete"), v.literal("partial"), v.literal("dead_lettered")),
     paginationOpts: paginationOptsValidator,
   },
   returns: v.any(),
@@ -96,10 +102,14 @@ export const getRunRecordsPageInternal = internalQuery({
 
       const [participants, events] = await Promise.all([
         ctx.db.query("runParticipants").withIndex("by_run", (q) => q.eq("runId", run._id)).collect(),
-        ctx.db
-          .query("runEvents")
-          .withIndex("by_run_and_created_at", (q) => q.eq("runId", run._id))
-          .collect(),
+        run.humanCritiqueCount == null
+          ? ctx.db
+              .query("runEvents")
+              .withIndex("by_run_kind_and_created_at", (q) =>
+                q.eq("runId", run._id).eq("kind", "human_critique_submitted"),
+              )
+              .collect()
+          : Promise.resolve([]),
       ]);
 
       records.push({
@@ -121,15 +131,15 @@ export const getRunRecordsPageInternal = internalQuery({
           .filter((participant) => participant.finalRanking)
           .sort((a, b) => a.order - b.order)
           .map((participant) => participant.finalRanking as LeaderboardRunRecord["finalRankings"][number]),
-        humanCritiqueCount: events
-          .filter((event) => event.kind === "human_critique_submitted")
-          .reduce(
+        humanCritiqueCount:
+          run.humanCritiqueCount ??
+          events.reduce(
             (sum, event) =>
               sum +
               (((event.payload as { critiques?: unknown[] } | undefined)?.critiques?.length) ?? 0),
             0,
           ),
-        completedModelCount: participants.filter((participant) => participant.status === "complete").length,
+        completedModelCount: participants.filter((participant) => participant.finalRanking).length,
       });
     }
 
@@ -140,6 +150,116 @@ export const getRunRecordsPageInternal = internalQuery({
     };
   },
 });
+
+async function collectRunRecords(ctx: ActionCtx): Promise<LeaderboardRunRecord[]> {
+  const records: LeaderboardRunRecord[] = [];
+
+  for (const status of ["complete", "partial", "dead_lettered"] as const) {
+    let cursor: string | null = null;
+    let isDone = false;
+
+    while (!isDone) {
+      const page: {
+        page: LeaderboardRunRecord[];
+        isDone: boolean;
+        continueCursor: string | null;
+      } = await ctx.runQuery(internal.leaderboards.getRunRecordsPageInternal, {
+        status,
+        paginationOpts: {
+          numItems: 8,
+          cursor,
+        },
+      });
+      records.push(...(page.page as LeaderboardRunRecord[]));
+      cursor = page.continueCursor;
+      isDone = page.isDone;
+    }
+  }
+
+  return records;
+}
+
+async function rebuildSnapshotsWithRecords(ctx: ActionCtx) {
+  const records = await collectRunRecords(ctx);
+
+  const updatedAt = Date.now();
+  const keys = (["final", "initial"] as const).flatMap((votePhase) => {
+    const leaderboard = buildLeaderboardDataFromRecords(records, votePhase);
+    return [
+      {
+        snapshotKey: toSnapshotKey(undefined, votePhase),
+        scopeType: "global" as const,
+        scopeValue: undefined,
+        entries: leaderboard.global,
+        metadata: leaderboard.insights,
+        totals: leaderboard.totals,
+      },
+      ...Object.entries(leaderboard.byCategory).map(([categoryId, entries]) => ({
+        snapshotKey: toSnapshotKey(categoryId, votePhase),
+        scopeType: "category" as const,
+        scopeValue: categoryId,
+        entries,
+        metadata: leaderboard.byCategoryInsights[categoryId] ?? {
+          featuredMatchups: [],
+          coverageGaps: [],
+        },
+        totals: leaderboard.categoryTotals[categoryId] ?? {
+          runs: 0,
+          ideas: 0,
+          critiques: 0,
+          completedModels: 0,
+        },
+      })),
+    ];
+  });
+
+  const modelStatsMap = new Map<
+    string,
+    {
+      modelId: string;
+      dayKey: string;
+      wins: number;
+      runs: number;
+      scoreTotal: number;
+      rankTotal: number;
+    }
+  >();
+
+  for (const record of records) {
+    const dayKey = new Date(record.updatedAt).toISOString().slice(0, 10);
+    for (const ranking of record.finalRankings) {
+      for (const entry of ranking.rankings) {
+        const key = `${entry.modelId}:${dayKey}`;
+        const current = modelStatsMap.get(key) ?? {
+          modelId: entry.modelId,
+          dayKey,
+          wins: 0,
+          runs: 0,
+          scoreTotal: 0,
+          rankTotal: 0,
+        };
+        current.wins += entry.rank === 1 ? 1 : 0;
+        current.runs += 1;
+        current.scoreTotal += entry.score;
+        current.rankTotal += entry.rank;
+        modelStatsMap.set(key, current);
+      }
+    }
+  }
+
+  await ctx.runMutation(internal.leaderboards.writeSnapshotsInternal, {
+    keys,
+    updatedAt,
+    modelStats: Array.from(modelStatsMap.values()).map((entry) => ({
+      modelId: entry.modelId,
+      dayKey: entry.dayKey,
+      wins: entry.wins,
+      runs: entry.runs,
+      averageFinalScore: entry.scoreTotal / entry.runs,
+      averageFinalRank: entry.rankTotal / entry.runs,
+    })),
+  });
+}
 
 export const writeSnapshotsInternal = internalMutation({
   args: {
@@ -209,108 +329,32 @@ export const rebuildSnapshotsInternal = internalAction({
   },
   returns: v.null(),
   handler: async (ctx) => {
-    const records: LeaderboardRunRecord[] = [];
+    await rebuildSnapshotsWithRecords(ctx);
+    return null;
+  },
+});
 
-    for (const status of ["complete", "partial"] as const) {
-      let cursor: string | null = null;
-      let isDone = false;
-
-      while (!isDone) {
-        const page: {
-          page: LeaderboardRunRecord[];
-          isDone: boolean;
-          continueCursor: string | null;
-        } = await ctx.runQuery(internal.leaderboards.getRunRecordsPageInternal, {
-          status,
-          paginationOpts: {
-            numItems: 8,
-            cursor,
+export const rebuildSnapshotsSafelyInternal = internalAction({
+  args: {
+    runId: v.optional(v.id("runs")),
+  },
+  returns: v.null(),
+  handler: async (ctx, args) => {
+    try {
+      await rebuildSnapshotsWithRecords(ctx);
+    } catch (error) {
+      if (args.runId) {
+        const message = error instanceof Error ? error.message : "Leaderboard snapshot rebuild failed";
+        await ctx.runMutation(internal.runs.recordPostCompletionIssueInternal, {
+          runId: args.runId,
+          kind: "leaderboard_snapshot_rebuild_failed",
+          message,
+          payload: {
+            source: "leaderboards.rebuildSnapshotsSafelyInternal",
           },
         });
-        records.push(...(page.page as LeaderboardRunRecord[]));
-        cursor = page.continueCursor;
-        isDone = page.isDone;
       }
     }
-
-    const updatedAt = Date.now();
-    const keys = (["final", "initial"] as const).flatMap((votePhase) => {
-      const leaderboard = buildLeaderboardDataFromRecords(records, votePhase);
-      return [
-        {
-          snapshotKey: toSnapshotKey(undefined, votePhase),
-          scopeType: "global" as const,
-          scopeValue: undefined,
-          entries: leaderboard.global,
-          metadata: leaderboard.insights,
-          totals: leaderboard.totals,
-        },
-        ...Object.entries(leaderboard.byCategory).map(([categoryId, entries]) => ({
-          snapshotKey: toSnapshotKey(categoryId, votePhase),
-          scopeType: "category" as const,
-          scopeValue: categoryId,
-          entries,
-          metadata: leaderboard.byCategoryInsights[categoryId] ?? {
-            featuredMatchups: [],
-            coverageGaps: [],
-          },
-          totals: leaderboard.categoryTotals[categoryId] ?? {
-            runs: 0,
-            ideas: 0,
-            critiques: 0,
-            completedModels: 0,
-          },
-        })),
-      ];
-    });
-
-    const modelStatsMap = new Map<
-      string,
-      {
-        modelId: string;
-        dayKey: string;
-        wins: number;
-        runs: number;
-        scoreTotal: number;
-        rankTotal: number;
-      }
-    >();
-
-    for (const record of records) {
-      const dayKey = new Date(record.updatedAt).toISOString().slice(0, 10);
-      for (const ranking of record.finalRankings) {
-        for (const entry of ranking.rankings) {
-          const key = `${entry.modelId}:${dayKey}`;
-          const current = modelStatsMap.get(key) ?? {
-            modelId: entry.modelId,
-            dayKey,
-            wins: 0,
-            runs: 0,
-            scoreTotal: 0,
-            rankTotal: 0,
-          };
-          current.wins += entry.rank === 1 ? 1 : 0;
-          current.runs += 1;
-          current.scoreTotal += entry.score;
-          current.rankTotal += entry.rank;
-          modelStatsMap.set(key, current);
-        }
-      }
-    }
-
-    await ctx.runMutation(internal.leaderboards.writeSnapshotsInternal, {
-      keys,
-      updatedAt,
-      modelStats: Array.from(modelStatsMap.values()).map((entry) => ({
-        modelId: entry.modelId,
-        dayKey: entry.dayKey,
-        wins: entry.wins,
-        runs: entry.runs,
-        averageFinalScore: entry.scoreTotal / entry.runs,
-        averageFinalRank: entry.rankTotal / entry.runs,
-      })),
-    });
-
     return null;
   },
 });
