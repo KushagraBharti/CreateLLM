@@ -99,13 +99,6 @@ export default function RankingsTable({
                 <span className="text-sm text-text-muted block">
                   {model.provider}
                 </span>
-                <span className="text-[11px] uppercase tracking-[0.14em] text-text-muted/80 block mt-1">
-                  confidence {entry.confidenceScore}
-                  <span className="mx-1.5 text-text-muted/40">/</span>
-                  direct {entry.directOpponentCount}
-                  <span className="mx-1.5 text-text-muted/40">/</span>
-                  nearby {entry.nearbyCoveredOpponentCount}/{entry.nearbyOpponentCount}
-                </span>
               </div>
 
               {/* Rating */}

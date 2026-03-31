@@ -2,6 +2,8 @@ import { v } from "convex/values";
 import { mutation, query } from "./_generated/server";
 import { requireAuthUser, requireProjectAccess, slugify } from "./lib/auth";
 
+const MIN_CONCURRENT_RUNS = 5;
+
 export const bootstrapViewer = mutation({
   args: {},
   returns: v.object({
@@ -62,7 +64,7 @@ export const bootstrapViewer = mutation({
       organizationId: orgId,
       projectId,
       maxModelsPerRun: 8,
-      maxConcurrentRuns: 2,
+      maxConcurrentRuns: MIN_CONCURRENT_RUNS,
       researchEnabled: true,
       hardBlockOnBudget: true,
       updatedByUserId: user._id,

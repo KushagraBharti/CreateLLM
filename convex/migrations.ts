@@ -10,6 +10,7 @@ const LEGACY_IMPORT_ORG_NAME = "Legacy Import Workspace";
 const LEGACY_IMPORT_ORG_SLUG = slugify("legacy-import");
 const LEGACY_IMPORT_PROJECT_NAME = "Legacy Archive";
 const LEGACY_IMPORT_PROJECT_SLUG = slugify("legacy-archive");
+const MIN_CONCURRENT_RUNS = 5;
 
 function controlActionKind(action: ControlActionRecord["action"]) {
   switch (action) {
@@ -178,7 +179,7 @@ export const ensureLegacyImportTargetInternal = internalMutation({
         organizationId: organization._id,
         projectId: project._id,
         maxModelsPerRun: 8,
-        maxConcurrentRuns: 2,
+        maxConcurrentRuns: MIN_CONCURRENT_RUNS,
         researchEnabled: true,
         hardBlockOnBudget: true,
         updatedByUserId: user._id,

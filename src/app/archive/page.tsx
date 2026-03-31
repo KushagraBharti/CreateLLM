@@ -35,7 +35,7 @@ export default async function ArchivePage({
         <div>
           <h1 className="font-display text-4xl sm:text-5xl text-text-primary">Archive</h1>
           <p className="text-text-secondary text-base mt-2">
-            Browse {page.totalMatchingRuns} archived benchmark run{page.totalMatchingRuns === 1 ? "" : "s"}
+            Browse {page.totalMatchingRuns} benchmark run{page.totalMatchingRuns === 1 ? "" : "s"}
           </p>
         </div>
         <Link href="/arena" className="text-base text-text-muted hover:text-accent transition-colors">

@@ -25,11 +25,18 @@ export default function ArchiveClient(props: ArchiveClientProps) {
       basePath="/archive"
       mode="archive"
       statusOptions={[
-        { value: "all", label: "All archived statuses" },
+        { value: "all", label: "All statuses" },
+        { value: "queued", label: "Queued" },
+        { value: "paused", label: "Paused" },
+        { value: "generating", label: "Generating" },
+        { value: "critiquing", label: "Critiquing" },
+        { value: "awaiting_human_critique", label: "Awaiting human critique" },
+        { value: "revising", label: "Revising" },
+        { value: "voting", label: "Voting" },
         { value: "complete", label: "Complete" },
         { value: "partial", label: "Partial" },
-        { value: "dead_lettered", label: "Dead lettered" },
         { value: "canceled", label: "Canceled" },
+        { value: "dead_lettered", label: "Dead lettered" },
         { value: "error", label: "Error" },
       ]}
     />

@@ -5,14 +5,14 @@
   "packageManager": "bun@1.3.6",
   "scripts": {
     "dev": "next dev",
-    "build": "next build",
+    "build": "next build --webpack",
     "start": "next start",
     "lint": "oxlint src --deny-warnings",
     "test": "vitest run",
     "typecheck": "bunx next typegen && node scripts/ensure-next-types.mjs && bunx tsc --noEmit --incremental false",
     "verify": "node scripts/verify-all.mjs",
     "import:legacy": "bun scripts/import-legacy-runs.mjs",
-    "postinstall": "node scripts/fix-eslint-minimatch.mjs"
+    "postinstall": "node scripts/fix-eslint-minimatch.mjs && node scripts/fix-bun-package-stubs.mjs"
   },
   "dependencies": {
     "@auth/core": "^0.37.4",
@@ -20,6 +20,7 @@
     "@convex-dev/workflow": "^0.3.8",
     "@convex-dev/workpool": "^0.4.6",
     "@sentry/nextjs": "^10.46.0",
+    "@swc/helpers": "0.5.15",
     "@vercel/analytics": "^2.0.1",
     "caniuse-lite": "^1.0.30001781",
     "canvas-confetti": "^1.9.4",

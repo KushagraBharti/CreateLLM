@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { mapReasoningState, runDocsToBenchmarkRunLite } from "../../convex/lib/runHelpers";
-import { filterLiveActivityEventsSince, participantCounterDeltas } from "../../convex/runs";
+import { filterLiveActivityEventsSince, participantCounterDeltas } from "../../convex/lib/runBandwidth";
 
 function makeRun(overrides: Record<string, unknown> = {}) {
   return {

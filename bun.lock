@@ -10,6 +10,7 @@
         "@convex-dev/workflow": "^0.3.8",
         "@convex-dev/workpool": "^0.4.6",
         "@sentry/nextjs": "^10.46.0",
+        "@swc/helpers": "0.5.15",
         "@vercel/analytics": "^2.0.1",
         "caniuse-lite": "^1.0.30001781",
         "canvas-confetti": "^1.9.4",

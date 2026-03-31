@@ -356,6 +356,9 @@ export interface BenchmarkRun {
     participantCount: number;
     minimumSuccessfulModels: number;
   };
+  consumesConcurrencySlot?: boolean;
+  lastProgressAt?: string;
+  staleDeadlineAt?: string;
 }
 
 export interface RunExportEntry {
@@ -387,7 +390,24 @@ export interface BenchmarkRunSummary {
   modelCount: number;
   completedModelCount: number;
   failedModelCount: number;
+  consumesConcurrencySlot?: boolean;
+  lastProgressAt?: string;
+  staleDeadlineAt?: string;
   canEdit: boolean;
+}
+
+export interface ConcurrentLimitBlockingRun {
+  id: string;
+  status: BenchmarkStatus;
+  promptExcerpt: string;
+  updatedAt: string;
+  currentStep: string;
+}
+
+export interface ConcurrentLimitState {
+  maxConcurrentRuns: number;
+  activeSlotCount: number;
+  blockingRuns: ConcurrentLimitBlockingRun[];
 }
 
 export interface LeaderboardEntry {

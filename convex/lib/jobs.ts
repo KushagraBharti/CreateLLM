@@ -4,6 +4,8 @@ import type { MutationCtx } from "../_generated/server";
 export const JOB_STATUSES = {
   queued: "queued",
   running: "running",
+  paused: "paused",
+  waitingForHuman: "waiting_for_human",
   complete: "complete",
   failed: "failed",
   canceled: "canceled",

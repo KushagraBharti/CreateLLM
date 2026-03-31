@@ -4,7 +4,7 @@
  *
  * THIS CODE IS AUTOMATICALLY GENERATED.
  *
- * To regenerate, run `npx convex dev`.
+ * To regenerate, run `bunx convex dev`.
  * @module
  */
 
@@ -13,6 +13,7 @@ import type * as app from "../app.js";
 import type * as auth from "../auth.js";
 import type * as benchmarkActions from "../benchmarkActions.js";
 import type * as benchmarkWorkflow from "../benchmarkWorkflow.js";
+import type * as crons from "../crons.js";
 import type * as diagnostics from "../diagnostics.js";
 import type * as exportActions from "../exportActions.js";
 import type * as exports from "../exports.js";
@@ -27,6 +28,7 @@ import type * as lib_leaderboard from "../lib/leaderboard.js";
 import type * as lib_leaderboardV2 from "../lib/leaderboardV2.js";
 import type * as lib_openrouter from "../lib/openrouter.js";
 import type * as lib_policies from "../lib/policies.js";
+import type * as lib_runBandwidth from "../lib/runBandwidth.js";
 import type * as lib_runHelpers from "../lib/runHelpers.js";
 import type * as migrationActions from "../migrationActions.js";
 import type * as migrations from "../migrations.js";
@@ -48,6 +50,7 @@ declare const fullApi: ApiFromModules<{
   auth: typeof auth;
   benchmarkActions: typeof benchmarkActions;
   benchmarkWorkflow: typeof benchmarkWorkflow;
+  crons: typeof crons;
   diagnostics: typeof diagnostics;
   exportActions: typeof exportActions;
   exports: typeof exports;
@@ -62,6 +65,7 @@ declare const fullApi: ApiFromModules<{
   "lib/leaderboardV2": typeof lib_leaderboardV2;
   "lib/openrouter": typeof lib_openrouter;
   "lib/policies": typeof lib_policies;
+  "lib/runBandwidth": typeof lib_runBandwidth;
   "lib/runHelpers": typeof lib_runHelpers;
   migrationActions: typeof migrationActions;
   migrations: typeof migrations;

@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useQuery } from "convex/react";
-import { BenchmarkRun, BenchmarkStatus } from "@/types";
+import { BenchmarkRun, BenchmarkStatus, ConcurrentLimitState } from "@/types";
 import { api } from "../../convex/_generated/api";
 
 export interface LiveToolActivity {
@@ -40,6 +40,7 @@ interface SSEState {
   liveCursorEventId: string | null;
   result: BenchmarkRun | null;
   error: string | null;
+  launchErrorDetails: ConcurrentLimitState | null;
   streamingText: Record<string, string>;
   toolActivity: Record<string, LiveToolActivity>;
   reasoningActivity: Record<string, LiveReasoningActivity>;
@@ -86,6 +87,7 @@ export function useBenchmarkSSE() {
     liveCursorEventId: null,
     result: null,
     error: null,
+    launchErrorDetails: null,
     streamingText: {},
     toolActivity: {},
     reasoningActivity: {},
@@ -330,6 +332,7 @@ export function useBenchmarkSSE() {
       liveCursorCreatedAt: 0,
       liveCursorEventId: null,
       error: null,
+      launchErrorDetails: null,
       streamingText: {},
       toolActivity: {},
       reasoningActivity: {},
@@ -349,6 +352,7 @@ export function useBenchmarkSSE() {
         liveCursorEventId: null,
         result: null,
         error: null,
+        launchErrorDetails: null,
         streamingText: {},
         toolActivity: {},
         reasoningActivity: {},
@@ -368,7 +372,11 @@ export function useBenchmarkSSE() {
 
         if (!response.ok) {
           const payload = await response.json().catch(() => ({}));
-          throw new Error(payload.error ?? `HTTP ${response.status}`);
+          const nextError = new Error(payload.error ?? `HTTP ${response.status}`) as Error & {
+            details?: ConcurrentLimitState | null;
+          };
+          nextError.details = payload.details ?? null;
+          throw nextError;
         }
 
         const payload = await response.json();
@@ -379,16 +387,22 @@ export function useBenchmarkSSE() {
           status: payload.status ?? prev.status,
           step: payload.currentStep ?? prev.step,
           error: null,
+          launchErrorDetails: null,
         }));
         return payload.id as string;
       } catch (error) {
         const message = error instanceof Error ? error.message : "Failed to start benchmark";
+        const launchErrorDetails =
+          error instanceof Error && "details" in error
+            ? ((error as Error & { details?: ConcurrentLimitState | null }).details ?? null)
+            : null;
         setState((prev) => ({
           ...prev,
           isRunning: false,
           status: null,
           step: "",
           error: message,
+          launchErrorDetails,
         }));
         return null;
       }
@@ -409,6 +423,7 @@ export function useBenchmarkSSE() {
         status: run.status,
         step: run.currentStep,
         error: run.status === "error" ? run.error ?? run.currentStep : null,
+        launchErrorDetails: null,
         isRunning: isRunningStatus(run.status),
         streamingText: {},
         toolActivity: {},
@@ -440,6 +455,7 @@ export function useBenchmarkSSE() {
           status: payload?.status ?? prev.status,
           step: payload?.currentStep ?? prev.step,
           error: null,
+          launchErrorDetails: null,
           isRunning: payload?.status
             ? isRunningStatus(payload.status)
             : prev.isRunning,
@@ -469,6 +485,7 @@ export function useBenchmarkSSE() {
       liveCursorEventId: null,
       result: null,
       error: null,
+      launchErrorDetails: null,
       streamingText: {},
       toolActivity: {},
       reasoningActivity: {},

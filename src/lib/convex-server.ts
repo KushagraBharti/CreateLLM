@@ -18,14 +18,6 @@ async function authOptions() {
   return token ? { token } : {};
 }
 
-const ARCHIVE_TERMINAL_STATUSES = [
-  "complete",
-  "partial",
-  "dead_lettered",
-  "canceled",
-  "error",
-] as const;
-
 function isTerminalStatus(status: BenchmarkRun["status"]) {
   return (
     status === "complete" ||
@@ -101,48 +93,15 @@ export async function fetchRunsPage(filters: ArchiveFilters = {}): Promise<Archi
 }
 
 export async function fetchArchivePage(filters: ArchiveFilters = {}): Promise<ArchivePageData> {
-  const requestedStatus = filters.status;
-  const archiveStatus =
-    requestedStatus && ARCHIVE_TERMINAL_STATUSES.includes(requestedStatus as typeof ARCHIVE_TERMINAL_STATUSES[number])
-      ? requestedStatus
-      : undefined;
-  const paginationOpts = {
-    numItems: Math.min(Math.max(filters.numItems ?? 25, 1), 50),
-    cursor: filters.cursor ?? null,
-  };
+  return fetchRunsPageInternal(filters);
+}
 
-  if (filters.query?.trim()) {
-    return (await fetchQuery(
-      api.runs.searchArchive,
-      {
-        query: filters.query.trim(),
-        organizationId: filters.organizationId as never,
-        projectId: filters.projectId as never,
-        paginationOpts,
-        categoryId: filters.categoryId || undefined,
-        status: archiveStatus,
-        visibility: filters.visibility,
-        createdAfter: filters.createdAfter,
-        createdBefore: filters.createdBefore,
-      },
-      await authOptions(),
-    )) as ArchivePageData;
-  }
-
-  return (await fetchQuery(
-    api.runs.listArchive,
-    {
-      organizationId: filters.organizationId as never,
-      projectId: filters.projectId as never,
-      paginationOpts,
-      categoryId: filters.categoryId || undefined,
-      status: archiveStatus,
-      visibility: filters.visibility,
-      createdAfter: filters.createdAfter,
-      createdBefore: filters.createdBefore,
-    },
+export async function fetchConcurrentLimitState(projectId?: string) {
+  return fetchQuery(
+    api.runs.getConcurrentLimitState,
+    { projectId: projectId as never },
     await authOptions(),
-  )) as ArchivePageData;
+  );
 }
 
 export async function fetchArchiveSummaries(): Promise<BenchmarkRunSummary[]> {

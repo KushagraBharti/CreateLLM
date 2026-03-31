@@ -67,16 +67,14 @@ function statusLabel(status: string) {
 
 function RunRowActions({
   run,
-  mode,
 }: {
   run: BenchmarkRunSummary;
-  mode: "runs" | "archive";
 }) {
   const router = useRouter();
   const [busyAction, setBusyAction] = useState<"pause" | "resume" | "cancel" | null>(null);
   const [confirmCancel, setConfirmCancel] = useState(false);
 
-  if (mode !== "runs" || !run.canEdit) {
+  if (!run.canEdit) {
     return null;
   }
 
@@ -214,13 +212,10 @@ export default function RunListClient({
     [categoryCounts, totalMatchingRuns],
   );
   const displayRuns = useMemo(() => {
-    if (mode !== "runs") {
-      return runs;
-    }
     const active = runs.filter((run) => isActiveStatus(run.status));
     const terminal = runs.filter((run) => !isActiveStatus(run.status));
     return [...active, ...terminal];
-  }, [mode, runs]);
+  }, [runs]);
 
   if (runs.length === 0) {
     return (
@@ -231,12 +226,12 @@ export default function RunListClient({
       >
         <p className="mb-6 font-display text-6xl text-text-muted/20">—</p>
         <h2 className="mb-2 font-display text-2xl text-text-secondary">
-          {mode === "runs" ? "No Runs Yet" : "No Archived Runs"}
+          {mode === "runs" ? "No Runs Yet" : "No Runs Found"}
         </h2>
         <p className="mb-6 max-w-xs text-base text-text-muted">
           {mode === "runs"
             ? "Launch a benchmark and it will appear here with live status and controls."
-            : "Terminal runs will appear here once benchmarks finish, fail, or are canceled."}
+            : "Runs will appear here across active, paused, and terminal states."}
         </p>
         <Link href="/arena" className="text-base text-accent transition-colors hover:text-accent-hover">
           New Benchmark &rarr;
@@ -379,7 +374,7 @@ export default function RunListClient({
                       ) : null}
                       <span className="hidden h-1 w-1 rounded-full bg-border sm:block" />
                       <span>{formatShortDate(run.timestamp)}</span>
-                      {mode === "runs" && isActiveStatus(run.status) ? (
+                      {isActiveStatus(run.status) ? (
                         <>
                           <span className="hidden h-1 w-1 rounded-full bg-border sm:block" />
                           <span className="font-mono text-[11px] uppercase tracking-[0.18em] text-accent">
@@ -392,7 +387,7 @@ export default function RunListClient({
 
                 </Link>
                 <div className="flex flex-shrink-0 items-center gap-4">
-                  <RunRowActions run={run} mode={mode} />
+                  <RunRowActions run={run} />
                   <Link href={`/run/${run.id}`} className="flex items-center gap-4">
                     <span className="font-mono text-[11px] uppercase tracking-[0.18em] text-text-muted">
                       {statusLabel(run.status)}

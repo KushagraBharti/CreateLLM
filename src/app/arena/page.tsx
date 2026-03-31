@@ -1,6 +1,7 @@
 "use client";
 
 import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useConvexAuth } from "convex/react";
 import { motion, AnimatePresence } from "framer-motion";
@@ -55,6 +56,7 @@ function ArenaContent() {
     step,
     result,
     error,
+    launchErrorDetails,
     hasResults,
     startBenchmark,
     pauseBenchmark,
@@ -67,6 +69,42 @@ function ArenaContent() {
     toolActivity,
     reasoningActivity,
   } = useBenchmarkSSE();
+
+  const renderLaunchErrorDetails = useCallback(() => {
+    if (!launchErrorDetails) {
+      return null;
+    }
+
+    return (
+      <div className="space-y-3 text-sm text-text-muted">
+        <p>
+          {launchErrorDetails.activeSlotCount}/{launchErrorDetails.maxConcurrentRuns} execution slots
+          are currently occupied.
+        </p>
+        <div className="space-y-2">
+          {launchErrorDetails.blockingRuns.map((blockingRun) => (
+            <div key={blockingRun.id} className="border-b border-border/40 pb-2 last:border-b-0">
+              <Link
+                href={`/run/${blockingRun.id}`}
+                className="block text-text-primary transition-colors hover:text-accent"
+              >
+                {blockingRun.promptExcerpt}
+              </Link>
+              <p className="mt-1 font-mono text-[11px] uppercase tracking-[0.18em] text-text-muted">
+                {blockingRun.status.replaceAll("_", " ")} · {blockingRun.currentStep}
+              </p>
+            </div>
+          ))}
+        </div>
+        <Link
+          href="/archive"
+          className="inline-block text-text-primary transition-colors hover:text-accent"
+        >
+          Open archive →
+        </Link>
+      </div>
+    );
+  }, [launchErrorDetails]);
 
   useEffect(() => {
     if (prevStatusRef.current !== "complete" && status === "complete" && result) {
@@ -249,9 +287,10 @@ function ArenaContent() {
                   Enter the Arena
                 </Button>
                 {error ? (
-                  <p className="mt-4 border-l border-[#C75050]/45 pl-4 text-base text-text-secondary">
-                    {error}
-                  </p>
+                  <div className="mt-4 space-y-3 border-l border-[#C75050]/45 pl-4 text-base text-text-secondary">
+                    <p>{error}</p>
+                    {renderLaunchErrorDetails()}
+                  </div>
                 ) : null}
               </div>
             </form>
@@ -326,8 +365,9 @@ function ArenaContent() {
               )}
 
               {error && (
-                <div className="border-l border-[#C75050]/45 pl-4 text-base text-text-secondary">
-                  {error}
+                <div className="space-y-3 border-l border-[#C75050]/45 pl-4 text-base text-text-secondary">
+                  <p>{error}</p>
+                  {renderLaunchErrorDetails()}
                 </div>
               )}
             </motion.div>
@@ -346,9 +386,10 @@ function ArenaContent() {
                 From a head-to-head duel to an eight-model battle royale — pick your competitors and write a prompt to begin.
               </p>
               {error ? (
-                <p className="mt-8 max-w-xl border-l border-[#C75050]/45 pl-4 text-base text-text-secondary text-left">
-                  {error}
-                </p>
+                <div className="mt-8 max-w-xl space-y-3 border-l border-[#C75050]/45 pl-4 text-base text-text-secondary text-left">
+                  <p>{error}</p>
+                  {renderLaunchErrorDetails()}
+                </div>
               ) : null}
             </motion.div>
           )}

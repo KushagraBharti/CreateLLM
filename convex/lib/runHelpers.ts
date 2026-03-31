@@ -372,6 +372,9 @@ export function runDocToSummary(run: Doc<"runs">, canEdit = false): BenchmarkRun
     modelCount: run.participantCount,
     completedModelCount: run.completedParticipantCount,
     failedModelCount: run.failedParticipantCount,
+    consumesConcurrencySlot: run.consumesConcurrencySlot,
+    lastProgressAt: run.lastProgressAt ? toIso(run.lastProgressAt) : undefined,
+    staleDeadlineAt: run.staleDeadlineAt ? toIso(run.staleDeadlineAt) : undefined,
     canEdit,
   };
 }
@@ -448,6 +451,9 @@ export function runDocsToBenchmarkRun(args: {
       participantCount: args.run.participantCount,
       minimumSuccessfulModels: args.run.minimumSuccessfulModels,
     },
+    consumesConcurrencySlot: args.run.consumesConcurrencySlot,
+    lastProgressAt: args.run.lastProgressAt ? toIso(args.run.lastProgressAt) : undefined,
+    staleDeadlineAt: args.run.staleDeadlineAt ? toIso(args.run.staleDeadlineAt) : undefined,
   };
 }
 

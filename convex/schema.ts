@@ -233,6 +233,10 @@ export default defineSchema({
     completedParticipantCount: v.number(),
     failedParticipantCount: v.number(),
     humanCritiqueCount: v.optional(v.number()),
+    consumesConcurrencySlot: v.optional(v.boolean()),
+    lastProgressAt: v.optional(v.number()),
+    staleDeadlineAt: v.optional(v.number()),
+    staleCheckToken: v.optional(v.string()),
     pauseRequested: v.boolean(),
     cancellationRequested: v.boolean(),
     error: v.optional(v.string()),
@@ -249,6 +253,11 @@ export default defineSchema({
     .index("by_legacy_run_id", ["legacyRunId"])
     .index("by_project_and_created_at", ["projectId", "createdAt"])
     .index("by_project_and_status_and_created_at", ["projectId", "status", "createdAt"])
+    .index("by_project_and_consumes_concurrency_slot_and_created_at", [
+      "projectId",
+      "consumesConcurrencySlot",
+      "createdAt",
+    ])
     .index("by_org_and_created_at", ["organizationId", "createdAt"])
     .index("by_created_at", ["createdAt"])
     .index("by_status_and_created_at", ["status", "createdAt"])

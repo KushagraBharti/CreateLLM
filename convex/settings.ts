@@ -9,6 +9,7 @@ import { requireAuthUser, requireOrganizationAdminAccess, requireProjectAccess }
 import { getEffectiveProviderPolicy } from "./lib/policies";
 
 const providerValidator = v.union(v.literal("openrouter"), v.literal("exa"));
+const MIN_CONCURRENT_RUNS = 5;
 
 export const getProviderStatus = query({
   args: {},
@@ -79,7 +80,7 @@ export const updateProviderPolicy = mutation({
       projectId: args.projectId,
       allowedModelIds: args.allowedModelIds,
       maxModelsPerRun: args.maxModelsPerRun,
-      maxConcurrentRuns: args.maxConcurrentRuns,
+      maxConcurrentRuns: Math.max(args.maxConcurrentRuns, MIN_CONCURRENT_RUNS),
       dailySpendLimitUsd: args.dailySpendLimitUsd,
       monthlySpendLimitUsd: args.monthlySpendLimitUsd,
       researchEnabled: args.researchEnabled,
@@ -103,7 +104,7 @@ export const updateProviderPolicy = mutation({
       resourceId: String(args.projectId ?? args.organizationId),
       metadata: {
         maxModelsPerRun: args.maxModelsPerRun,
-        maxConcurrentRuns: args.maxConcurrentRuns,
+        maxConcurrentRuns: Math.max(args.maxConcurrentRuns, MIN_CONCURRENT_RUNS),
         researchEnabled: args.researchEnabled,
         hardBlockOnBudget: args.hardBlockOnBudget,
       },
@@ -148,7 +149,7 @@ export const getProjectPolicy = query({
       projectId,
       allowedModelIds: policy?.allowedModelIds,
       maxModelsPerRun: policy?.maxModelsPerRun ?? 8,
-      maxConcurrentRuns: policy?.maxConcurrentRuns ?? 2,
+      maxConcurrentRuns: Math.max(policy?.maxConcurrentRuns ?? MIN_CONCURRENT_RUNS, MIN_CONCURRENT_RUNS),
       dailySpendLimitUsd: policy?.dailySpendLimitUsd,
       monthlySpendLimitUsd: policy?.monthlySpendLimitUsd,
       researchEnabled: policy?.researchEnabled ?? true,

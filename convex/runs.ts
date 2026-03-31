@@ -27,6 +27,7 @@ import {
   runDocsToBenchmarkRun,
   runDocsToBenchmarkRunLite,
 } from "./lib/runHelpers";
+import { filterLiveActivityEventsSince, participantCounterDeltas, type LiveActivityCursor } from "./lib/runBandwidth";
 import {
   createQueuedJob,
   finalizeJob,
@@ -98,15 +99,24 @@ function matchesCreatedAtRange(
   return true;
 }
 
-const ACTIVE_RUN_STATUSES = [
+const MIN_CONCURRENT_RUNS = 5;
+const EXECUTING_RUN_STALE_MS = 30 * 60 * 1000;
+const BLOCKED_RUN_STALE_MS = 24 * 60 * 60 * 1000;
+
+const EXECUTING_RUN_STATUSES = [
   "queued",
-  "paused",
   "generating",
   "critiquing",
-  "awaiting_human_critique",
   "revising",
   "voting",
 ] as const;
+
+const BLOCKED_RUN_STATUSES = [
+  "paused",
+  "awaiting_human_critique",
+] as const;
+
+const ACTIVE_RUN_STATUSES = [...EXECUTING_RUN_STATUSES, ...BLOCKED_RUN_STATUSES] as const;
 
 const TERMINAL_RUN_STATUSES = [
   "complete",
@@ -137,21 +147,68 @@ const LIVE_ACTIVITY_EVENT_KINDS = [
 
 type LiveActivityEventKind = (typeof LIVE_ACTIVITY_EVENT_KINDS)[number];
 
-type LiveActivityCursor = {
-  createdAt: number;
-  eventId?: string;
-};
-
-function isCountedCompleteStatus(status: Doc<"runParticipants">["status"]) {
-  return status === "complete" ? 1 : 0;
-}
-
-function isCountedFailedStatus(status: Doc<"runParticipants">["status"]) {
-  return status === "failed" ? 1 : 0;
-}
-
 function participantReachedBenchmarkCompletion(stage: RunCheckpointStage) {
   return stage === "vote";
+}
+
+function isExecutingRunStatus(status: Doc<"runs">["status"]) {
+  return (EXECUTING_RUN_STATUSES as readonly string[]).includes(status);
+}
+
+function isBlockedRunStatus(status: Doc<"runs">["status"]) {
+  return (BLOCKED_RUN_STATUSES as readonly string[]).includes(status);
+}
+
+function isTerminalRunStatus(status: Doc<"runs">["status"]) {
+  return (TERMINAL_RUN_STATUSES as readonly string[]).includes(status);
+}
+
+function consumesConcurrencySlotForStatus(status: Doc<"runs">["status"]) {
+  return isExecutingRunStatus(status);
+}
+
+function staleTimeoutMsForStatus(status: Doc<"runs">["status"]) {
+  if (isExecutingRunStatus(status)) {
+    return EXECUTING_RUN_STALE_MS;
+  }
+  if (isBlockedRunStatus(status)) {
+    return BLOCKED_RUN_STALE_MS;
+  }
+  return undefined;
+}
+
+function buildStaleCheckToken(now: number) {
+  return `${now}:${Math.random().toString(36).slice(2, 10)}`;
+}
+
+function buildRunLifecycleState(status: Doc<"runs">["status"], now: number) {
+  const timeoutMs = staleTimeoutMsForStatus(status);
+  return {
+    consumesConcurrencySlot: consumesConcurrencySlotForStatus(status),
+    lastProgressAt: now,
+    staleDeadlineAt: typeof timeoutMs === "number" ? now + timeoutMs : undefined,
+    staleCheckToken: typeof timeoutMs === "number" ? buildStaleCheckToken(now) : undefined,
+  };
+}
+
+function summarizeBlockingRun(run: Doc<"runs">) {
+  return {
+    id: run._id,
+    status: run.status,
+    promptExcerpt: run.promptExcerpt,
+    updatedAt: new Date(run.updatedAt).toISOString(),
+    currentStep: run.currentStep,
+  };
+}
+
+function shouldAutoCancelStaleRun(run: Pick<Doc<"runs">, "status" | "staleDeadlineAt">, now: number) {
+  if (isTerminalRunStatus(run.status)) {
+    return false;
+  }
+  if (typeof run.staleDeadlineAt !== "number") {
+    return false;
+  }
+  return run.staleDeadlineAt <= now;
 }
 
 function hasValidFinalOutcome(run: Doc<"runs">, participants: Doc<"runParticipants">[]) {
@@ -223,57 +280,6 @@ function matchesStatusFilters(
     return args.status === status;
   }
   return true;
-}
-
-export function participantCounterDeltas(
-  previousStatus: Doc<"runParticipants">["status"],
-  nextStatus: Doc<"runParticipants">["status"],
-) {
-  return {
-    completedDelta: isCountedCompleteStatus(nextStatus) - isCountedCompleteStatus(previousStatus),
-    failedDelta: isCountedFailedStatus(nextStatus) - isCountedFailedStatus(previousStatus),
-  };
-}
-
-function isLiveEventAfterCursor(
-  event: Pick<Doc<"runEvents">, "_id" | "createdAt">,
-  cursor: LiveActivityCursor,
-) {
-  if (event.createdAt > cursor.createdAt) {
-    return true;
-  }
-  if (event.createdAt < cursor.createdAt) {
-    return false;
-  }
-  if (!cursor.eventId) {
-    return true;
-  }
-  return String(event._id).localeCompare(cursor.eventId) > 0;
-}
-
-export function filterLiveActivityEventsSince(
-  events: Array<Pick<Doc<"runEvents">, "_id" | "createdAt">>,
-  cursor?: LiveActivityCursor | null,
-): Array<Pick<Doc<"runEvents">, "_id" | "createdAt">> {
-  return filterLiveActivityEventList(events, cursor);
-}
-
-function filterLiveActivityEventList<T extends Pick<Doc<"runEvents">, "_id" | "createdAt">>(
-  events: T[],
-  cursor?: LiveActivityCursor | null,
-): T[] {
-  const sorted = [...events].sort((a, b) => {
-    if (a.createdAt !== b.createdAt) {
-      return a.createdAt - b.createdAt;
-    }
-    return String(a._id).localeCompare(String(b._id));
-  });
-
-  if (!cursor) {
-    return sorted;
-  }
-
-  return sorted.filter((event) => isLiveEventAfterCursor(event, cursor));
 }
 
 async function getProjectMembership(
@@ -479,6 +485,101 @@ async function settleRunAccountingAndStats(
     settledCostUsd,
     budgetSettledAt: settledAt,
     updatedAt: Math.max(run.updatedAt, settledAt),
+  });
+}
+
+async function cancelRunWithReason(
+  ctx: MutationCtx,
+  args: {
+    run: Doc<"runs">;
+    reason: string;
+    now: number;
+    eventKind: string;
+    auditAction: string;
+    actorUserId: Id<"users">;
+    metadata?: Record<string, unknown>;
+  },
+) {
+  const participants = await ctx.db
+    .query("runParticipants")
+    .withIndex("by_run", (q) => q.eq("runId", args.run._id))
+    .collect();
+
+  await Promise.all(
+    participants.map((participant) => {
+      if (
+        participant.status === "complete" ||
+        participant.status === "failed" ||
+        participant.status === "canceled"
+      ) {
+        return Promise.resolve();
+      }
+      return ctx.db.patch(participant._id, {
+        status: "canceled",
+        completedAt: args.now,
+      });
+    }),
+  );
+
+  await ctx.db.patch(args.run._id, {
+    cancellationRequested: true,
+    status: "canceled",
+    currentStep: "Run canceled",
+    error: undefined,
+    updatedAt: args.now,
+    consumesConcurrencySlot: false,
+    lastProgressAt: args.now,
+    staleDeadlineAt: undefined,
+    staleCheckToken: undefined,
+  });
+  await syncRunSearchDocStatus(ctx, args.run._id, "canceled");
+  await settleRunAccountingAndStats(
+    ctx,
+    {
+      ...args.run,
+      cancellationRequested: true,
+      status: "canceled",
+      currentStep: "Run canceled",
+      error: undefined,
+      updatedAt: args.now,
+      consumesConcurrencySlot: false,
+      lastProgressAt: args.now,
+      staleDeadlineAt: undefined,
+      staleCheckToken: undefined,
+    },
+    "canceled",
+    args.now,
+  );
+  await finalizeBenchmarkJob(ctx, {
+    runId: args.run._id,
+    status: "canceled",
+    completedAt: args.now,
+    error: args.reason,
+  });
+  await ctx.db.insert("runEvents", {
+    runId: args.run._id,
+    stage: args.run.checkpointStage,
+    kind: args.eventKind,
+    participantModelId: undefined,
+    message: args.reason,
+    payload: args.metadata,
+    createdAt: args.now,
+  });
+  if (args.run.workflowId) {
+    await workflow.cancel(ctx, args.run.workflowId as never);
+  }
+  await ctx.db.insert("auditLogs", {
+    actorUserId: args.actorUserId,
+    organizationId: args.run.organizationId,
+    projectId: args.run.projectId,
+    action: args.auditAction,
+    resourceType: "run",
+    resourceId: String(args.run._id),
+    metadata: {
+      stage: args.run.checkpointStage,
+      ...args.metadata,
+    },
+    createdAt: args.now,
   });
 }
 
@@ -860,6 +961,9 @@ function runSummaryFromSearchDoc(
     modelCount: run.participantCount,
     completedModelCount: run.completedParticipantCount,
     failedModelCount: run.failedParticipantCount,
+    consumesConcurrencySlot: run.consumesConcurrencySlot,
+    lastProgressAt: run.lastProgressAt ? new Date(run.lastProgressAt).toISOString() : undefined,
+    staleDeadlineAt: run.staleDeadlineAt ? new Date(run.staleDeadlineAt).toISOString() : undefined,
     canEdit,
   };
 }
@@ -907,6 +1011,135 @@ async function recordResearchPreflightJob(
         ? "Research enabled but Exa is not configured; benchmark stages will continue without search."
         : undefined,
   });
+}
+
+async function syncRunSearchDocStatus(
+  ctx: MutationCtx,
+  runId: Id<"runs">,
+  status: Doc<"runs">["status"],
+) {
+  const searchDoc = await ctx.db
+    .query("runSearchDocs")
+    .withIndex("by_run", (q) => q.eq("runId", runId))
+    .unique();
+  if (searchDoc && searchDoc.status !== status) {
+    await ctx.db.patch(searchDoc._id, { status });
+  }
+}
+
+async function getBenchmarkJob(
+  ctx: MutationCtx,
+  runId: Id<"runs">,
+) {
+  const jobs = await ctx.db
+    .query("jobs")
+    .withIndex("by_run", (q) => q.eq("runId", runId))
+    .collect();
+  return jobs.find((entry) => entry.jobType === JOB_TYPES.benchmarkRun) ?? null;
+}
+
+async function completeBenchmarkJobAttemptWithStatus(
+  ctx: MutationCtx,
+  args: {
+    runId: Id<"runs">;
+    status: string;
+    completedAt: number;
+    error?: string;
+  },
+) {
+  const job = await getBenchmarkJob(ctx, args.runId);
+  if (!job) {
+    return;
+  }
+
+  await ctx.db.patch(job._id, {
+    status: args.status,
+    lastError: args.error,
+    updatedAt: args.completedAt,
+  });
+
+  const attempts = await ctx.db
+    .query("jobAttempts")
+    .withIndex("by_job", (q) => q.eq("jobId", job._id))
+    .collect();
+  const latestAttempt = attempts.sort((a, b) => b.attemptNumber - a.attemptNumber)[0];
+  if (!latestAttempt || latestAttempt.completedAt) {
+    return;
+  }
+
+  await ctx.db.patch(latestAttempt._id, {
+    status: args.status,
+    error: args.error,
+    completedAt: args.completedAt,
+    durationMs: args.completedAt - latestAttempt.startedAt,
+  });
+}
+
+async function startBenchmarkExecutionAttempt(
+  ctx: MutationCtx,
+  args: {
+    runId: Id<"runs">;
+    startedAt: number;
+    metadata?: Record<string, unknown>;
+  },
+) {
+  const job = await getBenchmarkJob(ctx, args.runId);
+  if (!job) {
+    return;
+  }
+
+  await startJobAttempt(ctx, {
+    jobId: job._id,
+    workflowId: job.workflowId,
+    startedAt: args.startedAt,
+    metadata: args.metadata,
+  });
+}
+
+async function scheduleRunStaleCheck(
+  ctx: MutationCtx,
+  args: {
+    runId: Id<"runs">;
+    staleDeadlineAt?: number;
+    staleCheckToken?: string;
+  },
+) {
+  if (typeof args.staleDeadlineAt !== "number" || !args.staleCheckToken) {
+    return;
+  }
+
+  await ctx.scheduler.runAfter(
+    Math.max(0, args.staleDeadlineAt - Date.now()),
+    internal.runs.handleScheduledStaleRunCheckInternal,
+    {
+      runId: args.runId,
+      staleCheckToken: args.staleCheckToken,
+    },
+  );
+}
+
+async function getProjectConcurrentLimitState(
+  ctx: QueryCtx | MutationCtx,
+  args: {
+    projectId: Id<"projects">;
+    organizationId: Id<"organizations">;
+  },
+) {
+  const policy = await getEffectiveProviderPolicy(ctx, args.organizationId, args.projectId);
+  const maxConcurrentRuns = Math.max(policy?.maxConcurrentRuns ?? MIN_CONCURRENT_RUNS, MIN_CONCURRENT_RUNS);
+  const blockingRuns = await ctx.db
+    .query("runs")
+    .withIndex("by_project_and_consumes_concurrency_slot_and_created_at", (q) =>
+      q.eq("projectId", args.projectId).eq("consumesConcurrencySlot", true),
+    )
+    .order("desc")
+    .take(maxConcurrentRuns);
+
+  return {
+    maxConcurrentRuns,
+    activeSlotCount: blockingRuns.length,
+    blockingRuns: blockingRuns.map(summarizeBlockingRun),
+  };
 }
 
 async function reverseRunAccountingAndStats(
@@ -1170,6 +1403,31 @@ export const viewerCanEdit = query({
     const viewerUserId = await getAuthUserId(ctx);
     const membership = await getProjectMembership(ctx, viewerUserId, run.projectId);
     return canEditRun(run, viewerUserId, membership);
+  },
+});
+
+export const getConcurrentLimitState = query({
+  args: {
+    projectId: v.optional(v.id("projects")),
+  },
+  returns: v.any(),
+  handler: async (ctx, args) => {
+    const user = await requireAuthUser(ctx);
+    const projectId = args.projectId ?? user.defaultProjectId;
+    if (!projectId) {
+      throw new ConvexError("No default project is configured");
+    }
+
+    await requireProjectAccess(ctx, projectId, "editor");
+    const project = await ctx.db.get(projectId);
+    if (!project) {
+      throw new ConvexError("Project not found");
+    }
+
+    return await getProjectConcurrentLimitState(ctx, {
+      projectId,
+      organizationId: project.organizationId,
+    });
   },
 });
 
@@ -1554,22 +1812,20 @@ export const create = mutation({
       throw new ConvexError("One or more selected models are blocked by project policy");
     }
 
-    if (policy) {
-      const activeCounts = await Promise.all(
-        ACTIVE_RUN_STATUSES.map((status) =>
-          ctx.db
-            .query("runs")
-            .withIndex("by_project_and_status_and_created_at", (q) =>
-              q.eq("projectId", projectId).eq("status", status),
-            )
-            .take(policy.maxConcurrentRuns),
-        ),
-      );
-      const activeRunCount = activeCounts.reduce((sum, runs) => sum + runs.length, 0);
-      if (activeRunCount >= policy.maxConcurrentRuns) {
+    const maxConcurrentRuns = Math.max(policy?.maxConcurrentRuns ?? MIN_CONCURRENT_RUNS, MIN_CONCURRENT_RUNS);
+    {
+      const activeRuns = await ctx.db
+        .query("runs")
+        .withIndex("by_project_and_consumes_concurrency_slot_and_created_at", (q) =>
+          q.eq("projectId", projectId).eq("consumesConcurrencySlot", true),
+        )
+        .take(maxConcurrentRuns);
+      if (activeRuns.length >= maxConcurrentRuns) {
         throw new ConvexError("This project has reached its concurrent run limit");
       }
+    }
 
+    if (policy) {
       const projectedRunReserveUsd = selectedModels.length * DEFAULT_RUN_RESERVE_USD_PER_MODEL;
       const dayKey = dayKeyFromTimestamp(Date.now());
       const monthKeyPrefix = dayKey.slice(0, 7);
@@ -1623,6 +1879,7 @@ export const create = mutation({
     });
 
     const projectedRunReserveUsd = selectedModels.length * DEFAULT_RUN_RESERVE_USD_PER_MODEL;
+    const lifecycleState = buildRunLifecycleState("queued", now);
     const runId = await ctx.db.insert("runs", {
       legacyRunId: undefined,
       ownerUserId: user._id,
@@ -1642,6 +1899,10 @@ export const create = mutation({
       completedParticipantCount: 0,
       failedParticipantCount: 0,
       humanCritiqueCount: 0,
+      consumesConcurrencySlot: lifecycleState.consumesConcurrencySlot,
+      lastProgressAt: lifecycleState.lastProgressAt,
+      staleDeadlineAt: lifecycleState.staleDeadlineAt,
+      staleCheckToken: lifecycleState.staleCheckToken,
       pauseRequested: false,
       cancellationRequested: false,
       error: undefined,
@@ -1814,6 +2075,11 @@ export const create = mutation({
         workflowId,
       },
     });
+    await scheduleRunStaleCheck(ctx, {
+      runId,
+      staleDeadlineAt: lifecycleState.staleDeadlineAt,
+      staleCheckToken: lifecycleState.staleCheckToken,
+    });
     await recordResearchPreflightJob(ctx, {
       runId,
       organizationId: project.organizationId,
@@ -1857,12 +2123,17 @@ export const pause = mutation({
     }
     const { user } = await requireProjectAccess(ctx, run.projectId, "editor");
     const now = Date.now();
+    const lifecycleState = buildRunLifecycleState("paused", now);
 
     await ctx.db.patch(run._id, {
       pauseRequested: true,
       status: "paused",
       currentStep: "Run paused",
       updatedAt: now,
+      consumesConcurrencySlot: lifecycleState.consumesConcurrencySlot,
+      lastProgressAt: lifecycleState.lastProgressAt,
+      staleDeadlineAt: lifecycleState.staleDeadlineAt,
+      staleCheckToken: lifecycleState.staleCheckToken,
     });
     await ctx.db.insert("runEvents", {
       runId: run._id,
@@ -1882,13 +2153,18 @@ export const pause = mutation({
       metadata: { stage: run.checkpointStage },
       createdAt: now,
     });
-    const searchDoc = await ctx.db
-      .query("runSearchDocs")
-      .withIndex("by_run", (q) => q.eq("runId", run._id))
-      .unique();
-    if (searchDoc && searchDoc.status !== "paused") {
-      await ctx.db.patch(searchDoc._id, { status: "paused" });
-    }
+    await syncRunSearchDocStatus(ctx, run._id, "paused");
+    await completeBenchmarkJobAttemptWithStatus(ctx, {
+      runId: run._id,
+      status: JOB_STATUSES.paused,
+      completedAt: now,
+      error: args.reason,
+    });
+    await scheduleRunStaleCheck(ctx, {
+      runId: run._id,
+      staleDeadlineAt: lifecycleState.staleDeadlineAt,
+      staleCheckToken: lifecycleState.staleCheckToken,
+    });
 
     const nextRun = await ctx.db.get(run._id);
     return await hydrateRun(ctx, nextRun!);
@@ -1908,16 +2184,23 @@ export const resume = mutation({
     }
     const { user } = await requireProjectAccess(ctx, run.projectId, "editor");
     const now = Date.now();
+    const resumedStatus =
+      run.checkpointStage === "human_critique" ? "awaiting_human_critique" : "queued";
+    const lifecycleState = buildRunLifecycleState(resumedStatus, now);
 
     await ctx.db.patch(run._id, {
       pauseRequested: false,
-      status: run.checkpointStage === "human_critique" ? "awaiting_human_critique" : "queued",
+      status: resumedStatus,
       currentStep:
-        run.checkpointStage === "human_critique"
+        resumedStatus === "awaiting_human_critique"
           ? "Waiting for human critique review"
           : "Queued to resume",
       updatedAt: now,
       error: undefined,
+      consumesConcurrencySlot: lifecycleState.consumesConcurrencySlot,
+      lastProgressAt: lifecycleState.lastProgressAt,
+      staleDeadlineAt: lifecycleState.staleDeadlineAt,
+      staleCheckToken: lifecycleState.staleCheckToken,
     });
     await ctx.db.insert("runEvents", {
       runId: run._id,
@@ -1943,15 +2226,27 @@ export const resume = mutation({
       metadata: { stage: run.checkpointStage },
       createdAt: now,
     });
-    const resumedStatus =
-      run.checkpointStage === "human_critique" ? "awaiting_human_critique" : "queued";
-    const searchDoc = await ctx.db
-      .query("runSearchDocs")
-      .withIndex("by_run", (q) => q.eq("runId", run._id))
-      .unique();
-    if (searchDoc && searchDoc.status !== resumedStatus) {
-      await ctx.db.patch(searchDoc._id, { status: resumedStatus });
+    await syncRunSearchDocStatus(ctx, run._id, resumedStatus);
+    if (resumedStatus === "awaiting_human_critique") {
+      await completeBenchmarkJobAttemptWithStatus(ctx, {
+        runId: run._id,
+        status: JOB_STATUSES.waitingForHuman,
+        completedAt: now,
+      });
+    } else {
+      await startBenchmarkExecutionAttempt(ctx, {
+        runId: run._id,
+        startedAt: now,
+        metadata: {
+          reason: "resume",
+        },
+      });
     }
+    await scheduleRunStaleCheck(ctx, {
+      runId: run._id,
+      staleDeadlineAt: lifecycleState.staleDeadlineAt,
+      staleCheckToken: lifecycleState.staleCheckToken,
+    });
 
     const nextRun = await ctx.db.get(run._id);
     return await hydrateRun(ctx, nextRun!);
@@ -1973,11 +2268,16 @@ export const proceed = mutation({
       throw new ConvexError("Run is not waiting for human critique");
     }
 
+    const lifecycleState = buildRunLifecycleState("queued", now);
     await ctx.db.patch(run._id, {
       status: "queued",
       currentStep: "Queued for revision",
       updatedAt: now,
       pauseRequested: false,
+      consumesConcurrencySlot: lifecycleState.consumesConcurrencySlot,
+      lastProgressAt: lifecycleState.lastProgressAt,
+      staleDeadlineAt: lifecycleState.staleDeadlineAt,
+      staleCheckToken: lifecycleState.staleCheckToken,
     });
     await ctx.db.insert("runEvents", {
       runId: run._id,
@@ -2003,13 +2303,19 @@ export const proceed = mutation({
       metadata: { stage: "human_critique" },
       createdAt: now,
     });
-    const searchDoc = await ctx.db
-      .query("runSearchDocs")
-      .withIndex("by_run", (q) => q.eq("runId", run._id))
-      .unique();
-    if (searchDoc && searchDoc.status !== "queued") {
-      await ctx.db.patch(searchDoc._id, { status: "queued" });
-    }
+    await syncRunSearchDocStatus(ctx, run._id, "queued");
+    await startBenchmarkExecutionAttempt(ctx, {
+      runId: run._id,
+      startedAt: now,
+      metadata: {
+        reason: "human_critique_proceed",
+      },
+    });
+    await scheduleRunStaleCheck(ctx, {
+      runId: run._id,
+      staleDeadlineAt: lifecycleState.staleDeadlineAt,
+      staleCheckToken: lifecycleState.staleCheckToken,
+    });
 
     const nextRun = await ctx.db.get(run._id);
     return await hydrateRun(ctx, nextRun!);
@@ -2033,70 +2339,14 @@ export const cancel = mutation({
     const { user } = await requireProjectAccess(ctx, run.projectId, "editor");
     const now = Date.now();
 
-    const participants = await ctx.db
-      .query("runParticipants")
-      .withIndex("by_run", (q) => q.eq("runId", run._id))
-      .collect();
-
-    await Promise.all(
-      participants.map((participant) => {
-        if (participant.status === "complete" || participant.status === "failed") {
-          return Promise.resolve();
-        }
-        return ctx.db.patch(participant._id, {
-          status: "canceled",
-          completedAt: now,
-        });
-      }),
-    );
-
-    await ctx.db.patch(run._id, {
-      cancellationRequested: true,
-      status: "canceled",
-      currentStep: "Run canceled",
-      updatedAt: now,
-    });
-    await settleRunAccountingAndStats(ctx, {
-      ...run,
-      cancellationRequested: true,
-      status: "canceled",
-      currentStep: "Run canceled",
-      updatedAt: now,
-    }, "canceled", now);
-    await finalizeBenchmarkJob(ctx, {
-      runId: run._id,
-      status: "canceled",
-      completedAt: now,
-      error: args.reason ?? "Canceled by user",
-    });
-    await ctx.db.insert("runEvents", {
-      runId: run._id,
-      stage: run.checkpointStage,
-      kind: "run_canceled",
-      participantModelId: undefined,
-      message: args.reason ?? "Canceled by user",
-      createdAt: now,
-    });
-    if (run.workflowId) {
-      await workflow.cancel(ctx, run.workflowId as never);
-    }
-    await ctx.db.insert("auditLogs", {
+    await cancelRunWithReason(ctx, {
+      run,
+      reason: args.reason ?? "Canceled by user",
+      now,
+      eventKind: "run_canceled",
+      auditAction: "run.canceled",
       actorUserId: user._id,
-      organizationId: run.organizationId,
-      projectId: run.projectId,
-      action: "run.canceled",
-      resourceType: "run",
-      resourceId: String(run._id),
-      metadata: { stage: run.checkpointStage },
-      createdAt: now,
     });
-    const searchDoc = await ctx.db
-      .query("runSearchDocs")
-      .withIndex("by_run", (q) => q.eq("runId", run._id))
-      .unique();
-    if (searchDoc && searchDoc.status !== "canceled") {
-      await ctx.db.patch(searchDoc._id, { status: "canceled" });
-    }
 
     const nextRun = await ctx.db.get(run._id);
     return await hydrateRun(ctx, nextRun!);
@@ -2160,9 +2410,18 @@ export const submitHumanCritiques = mutation({
       payload: { critiques },
       createdAt: now,
     });
+    const lifecycleState = buildRunLifecycleState(run.status, now);
     await ctx.db.patch(run._id, {
       humanCritiqueCount: (run.humanCritiqueCount ?? 0) + critiques.length,
       updatedAt: now,
+      lastProgressAt: lifecycleState.lastProgressAt,
+      staleDeadlineAt: lifecycleState.staleDeadlineAt,
+      staleCheckToken: lifecycleState.staleCheckToken,
+    });
+    await scheduleRunStaleCheck(ctx, {
+      runId: run._id,
+      staleDeadlineAt: lifecycleState.staleDeadlineAt,
+      staleCheckToken: lifecycleState.staleCheckToken,
     });
     await ctx.db.insert("auditLogs", {
       actorUserId: user._id,
@@ -2177,6 +2436,119 @@ export const submitHumanCritiques = mutation({
 
     const nextRun = await ctx.db.get(run._id);
     return await hydrateRun(ctx, nextRun!);
+  },
+});
+
+export const handleScheduledStaleRunCheckInternal = internalMutation({
+  args: {
+    runId: v.id("runs"),
+    staleCheckToken: v.string(),
+  },
+  returns: v.null(),
+  handler: async (ctx, args) => {
+    const run = await ctx.db.get(args.runId);
+    if (!run || isTerminalRunStatus(run.status)) {
+      return null;
+    }
+
+    if (run.staleCheckToken && run.staleCheckToken !== args.staleCheckToken) {
+      return null;
+    }
+
+    const now = Date.now();
+    const timeoutMs = staleTimeoutMsForStatus(run.status);
+    const staleDeadlineAt =
+      run.staleDeadlineAt ??
+      (typeof timeoutMs === "number" ? (run.lastProgressAt ?? run.updatedAt) + timeoutMs : undefined);
+    if (!shouldAutoCancelStaleRun({ status: run.status, staleDeadlineAt }, now)) {
+      return null;
+    }
+
+    const timeoutClass = isExecutingRunStatus(run.status) ? "executing" : "blocked";
+    await cancelRunWithReason(ctx, {
+      run,
+      reason:
+        timeoutClass === "executing"
+          ? "Run auto-canceled after 30 minutes without progress."
+          : "Run auto-canceled after 24 hours without manual follow-up.",
+      now,
+      eventKind: "run_auto_canceled_stale",
+      auditAction: "run.auto_canceled_stale",
+      actorUserId: run.ownerUserId,
+      metadata: {
+        timeoutClass,
+        staleDeadlineAt,
+      },
+    });
+
+    return null;
+  },
+});
+
+export const reconcileRunConcurrencyStateInternal = internalAction({
+  args: {},
+  returns: v.object({
+    reconciledRuns: v.number(),
+  }),
+  handler: async (ctx) => {
+    let cursor: string | null = null;
+    let isDone = false;
+    let reconciledRuns = 0;
+    const now = Date.now();
+
+    while (!isDone) {
+      const page: {
+        page: Doc<"runs">[];
+        isDone: boolean;
+        continueCursor: string | null;
+      } = await ctx.runQuery(internal.runs.getRunsForConcurrencyReconciliationInternal, {
+        paginationOpts: {
+          numItems: 32,
+          cursor,
+        },
+      });
+
+      for (const run of page.page) {
+        const expectedConsumesSlot = consumesConcurrencySlotForStatus(run.status);
+        const expectedDeadline =
+          typeof staleTimeoutMsForStatus(run.status) === "number"
+            ? (run.lastProgressAt ?? run.updatedAt) + staleTimeoutMsForStatus(run.status)!
+            : undefined;
+
+        if (shouldAutoCancelStaleRun(run, now)) {
+          await ctx.runMutation(internal.runs.handleScheduledStaleRunCheckInternal, {
+            runId: run._id,
+            staleCheckToken: run.staleCheckToken ?? buildStaleCheckToken(now),
+          });
+          reconciledRuns += 1;
+          continue;
+        }
+
+        if (
+          run.consumesConcurrencySlot !== expectedConsumesSlot ||
+          run.staleDeadlineAt !== expectedDeadline
+        ) {
+          await ctx.runMutation(internal.runs.repairRunConcurrencyStateInternal, {
+            runId: run._id,
+            consumesConcurrencySlot: expectedConsumesSlot,
+            lastProgressAt: run.lastProgressAt ?? run.updatedAt,
+            staleDeadlineAt: expectedDeadline,
+            staleCheckToken:
+              typeof expectedDeadline === "number"
+                ? run.staleCheckToken ?? buildStaleCheckToken(now)
+                : undefined,
+          });
+          reconciledRuns += 1;
+        }
+      }
+
+      cursor = page.continueCursor;
+      isDone = page.isDone;
+    }
+
+    return {
+      reconciledRuns,
+    };
   },
 });
 
@@ -2662,6 +3034,7 @@ export const updateRunForStageInternal = internalMutation({
     if (!run) {
       throw new ConvexError("Run not found");
     }
+    const lifecycleState = buildRunLifecycleState(args.status, now);
     const existing = await ctx.db
       .query("runStageStates")
       .withIndex("by_run_and_stage", (q) => q.eq("runId", args.runId).eq("stage", args.stage))
@@ -2706,15 +3079,34 @@ export const updateRunForStageInternal = internalMutation({
         currentStep: args.currentStep,
         checkpointStage: args.stage,
         updatedAt: now,
+        consumesConcurrencySlot: lifecycleState.consumesConcurrencySlot,
+        lastProgressAt: lifecycleState.lastProgressAt,
+        staleDeadlineAt: lifecycleState.staleDeadlineAt,
+        staleCheckToken: lifecycleState.staleCheckToken,
+      });
+    } else {
+      await ctx.db.patch(args.runId, {
+        consumesConcurrencySlot: lifecycleState.consumesConcurrencySlot,
+        lastProgressAt: lifecycleState.lastProgressAt,
+        staleDeadlineAt: lifecycleState.staleDeadlineAt,
+        staleCheckToken: lifecycleState.staleCheckToken,
+        updatedAt: now,
       });
     }
-    const searchDoc = await ctx.db
-      .query("runSearchDocs")
-      .withIndex("by_run", (q) => q.eq("runId", args.runId))
-      .unique();
-    if (searchDoc && searchDoc.status !== args.status) {
-      await ctx.db.patch(searchDoc._id, { status: args.status });
+    await syncRunSearchDocStatus(ctx, args.runId, args.status);
+
+    if (args.status === "awaiting_human_critique") {
+      await completeBenchmarkJobAttemptWithStatus(ctx, {
+        runId: args.runId,
+        status: JOB_STATUSES.waitingForHuman,
+        completedAt: now,
+      });
     }
+    await scheduleRunStaleCheck(ctx, {
+      runId: args.runId,
+      staleDeadlineAt: lifecycleState.staleDeadlineAt,
+      staleCheckToken: lifecycleState.staleCheckToken,
+    });
 
     await ctx.db.insert("runEvents", {
       runId: args.runId,
@@ -2744,7 +3136,8 @@ export const markParticipantStartedInternal = internalMutation({
   returns: v.null(),
   handler: async (ctx, args) => {
     const participant = await ctx.db.get(args.participantId);
-    if (!participant || participant.runId !== args.runId) {
+    const run = await ctx.db.get(args.runId);
+    if (!participant || participant.runId !== args.runId || !run) {
       throw new ConvexError("Participant not found");
     }
 
@@ -2754,6 +3147,18 @@ export const markParticipantStartedInternal = internalMutation({
       startedAt: args.startedAt,
       completedAt: undefined,
       error: undefined,
+    });
+    const lifecycleState = buildRunLifecycleState(run.status, args.startedAt);
+    await ctx.db.patch(args.runId, {
+      lastProgressAt: lifecycleState.lastProgressAt,
+      staleDeadlineAt: lifecycleState.staleDeadlineAt,
+      staleCheckToken: lifecycleState.staleCheckToken,
+      updatedAt: args.startedAt,
+    });
+    await scheduleRunStaleCheck(ctx, {
+      runId: args.runId,
+      staleDeadlineAt: lifecycleState.staleDeadlineAt,
+      staleCheckToken: lifecycleState.staleCheckToken,
     });
     await ctx.db.insert("runEvents", {
       runId: args.runId,
@@ -2859,10 +3264,19 @@ export const recordParticipantStageSuccessInternal = internalMutation({
     const deltas = participantReachedBenchmarkCompletion(args.stage)
       ? participantCounterDeltas(participant.status, "complete")
       : { completedDelta: 0, failedDelta: 0 };
+    const lifecycleState = buildRunLifecycleState(run.status, args.completedAt);
     await ctx.db.patch(args.runId, {
       completedParticipantCount: Math.max(0, run.completedParticipantCount + deltas.completedDelta),
       failedParticipantCount: Math.max(0, run.failedParticipantCount + deltas.failedDelta),
       updatedAt: args.completedAt,
+      lastProgressAt: lifecycleState.lastProgressAt,
+      staleDeadlineAt: lifecycleState.staleDeadlineAt,
+      staleCheckToken: lifecycleState.staleCheckToken,
+    });
+    await scheduleRunStaleCheck(ctx, {
+      runId: args.runId,
+      staleDeadlineAt: lifecycleState.staleDeadlineAt,
+      staleCheckToken: lifecycleState.staleCheckToken,
     });
 
     await ctx.db.insert("runEvents", {
@@ -2908,10 +3322,19 @@ export const recordParticipantStageFailureInternal = internalMutation({
     });
 
     const deltas = participantCounterDeltas(participant.status, "failed");
+    const lifecycleState = buildRunLifecycleState(run.status, args.completedAt);
     await ctx.db.patch(args.runId, {
       completedParticipantCount: Math.max(0, run.completedParticipantCount + deltas.completedDelta),
       failedParticipantCount: Math.max(0, run.failedParticipantCount + deltas.failedDelta),
       updatedAt: args.completedAt,
+      lastProgressAt: lifecycleState.lastProgressAt,
+      staleDeadlineAt: lifecycleState.staleDeadlineAt,
+      staleCheckToken: lifecycleState.staleCheckToken,
+    });
+    await scheduleRunStaleCheck(ctx, {
+      runId: args.runId,
+      staleDeadlineAt: lifecycleState.staleDeadlineAt,
+      staleCheckToken: lifecycleState.staleCheckToken,
     });
 
     await ctx.db.insert("runEvents", {
@@ -2938,11 +3361,7 @@ async function finalizeBenchmarkJob(
     error?: string;
   },
 ) {
-  const jobs = await ctx.db
-    .query("jobs")
-    .withIndex("by_run", (q) => q.eq("runId", args.runId))
-    .collect();
-  const job = jobs.find((entry) => entry.jobType === JOB_TYPES.benchmarkRun);
+  const job = await getBenchmarkJob(ctx, args.runId);
   if (!job) {
     return;
   }
@@ -2996,16 +3415,22 @@ export const finalizeRunOutcomeInternal = internalMutation({
         finalWinnerName: args.finalWinnerName,
         error: args.error,
         updatedAt: now,
+        consumesConcurrencySlot: false,
+        lastProgressAt: now,
+        staleDeadlineAt: undefined,
+        staleCheckToken: undefined,
+      });
+    } else {
+      await ctx.db.patch(args.runId, {
+        consumesConcurrencySlot: false,
+        lastProgressAt: now,
+        staleDeadlineAt: undefined,
+        staleCheckToken: undefined,
+        updatedAt: now,
       });
     }
 
-    const searchDoc = await ctx.db
-      .query("runSearchDocs")
-      .withIndex("by_run", (q) => q.eq("runId", args.runId))
-      .unique();
-    if (searchDoc && searchDoc.status !== args.status) {
-      await ctx.db.patch(searchDoc._id, { status: args.status });
-    }
+    await syncRunSearchDocStatus(ctx, args.runId, args.status);
     await settleRunAccountingAndStats(
       ctx,
       {
@@ -3016,6 +3441,10 @@ export const finalizeRunOutcomeInternal = internalMutation({
         finalWinnerName: args.finalWinnerName,
         error: args.error,
         updatedAt: now,
+        consumesConcurrencySlot: false,
+        lastProgressAt: now,
+        staleDeadlineAt: undefined,
+        staleCheckToken: undefined,
       },
       args.status,
       now,
@@ -3098,6 +3527,187 @@ export const recordPostCompletionIssueInternal = internalMutation({
   },
 });
 
+export const getRunsForConcurrencyReconciliationInternal = internalQuery({
+  args: {
+    paginationOpts: paginationOptsValidator,
+  },
+  returns: v.any(),
+  handler: async (ctx, args) => {
+    return await ctx.db
+      .query("runs")
+      .withIndex("by_created_at")
+      .order("asc")
+      .paginate(args.paginationOpts);
+  },
+});
+
+export const repairRunConcurrencyStateInternal = internalMutation({
+  args: {
+    runId: v.id("runs"),
+    consumesConcurrencySlot: v.boolean(),
+    lastProgressAt: v.number(),
+    staleDeadlineAt: v.optional(v.number()),
+    staleCheckToken: v.optional(v.string()),
+  },
+  returns: v.null(),
+  handler: async (ctx, args) => {
+    const run = await ctx.db.get(args.runId);
+    if (!run) {
+      return null;
+    }
+
+    if (
+      run.consumesConcurrencySlot !== args.consumesConcurrencySlot ||
+      run.lastProgressAt !== args.lastProgressAt ||
+      run.staleDeadlineAt !== args.staleDeadlineAt ||
+      run.staleCheckToken !== args.staleCheckToken
+    ) {
+      await ctx.db.patch(run._id, {
+        consumesConcurrencySlot: args.consumesConcurrencySlot,
+        lastProgressAt: args.lastProgressAt,
+        staleDeadlineAt: args.staleDeadlineAt,
+        staleCheckToken: args.staleCheckToken,
+        updatedAt: Math.max(run.updatedAt, args.lastProgressAt),
+      });
+    }
+
+    if (run.status === "paused") {
+      await completeBenchmarkJobAttemptWithStatus(ctx, {
+        runId: run._id,
+        status: JOB_STATUSES.paused,
+        completedAt: args.lastProgressAt,
+      });
+    } else if (run.status === "awaiting_human_critique") {
+      await completeBenchmarkJobAttemptWithStatus(ctx, {
+        runId: run._id,
+        status: JOB_STATUSES.waitingForHuman,
+        completedAt: args.lastProgressAt,
+      });
+    }
+
+    await scheduleRunStaleCheck(ctx, {
+      runId: run._id,
+      staleDeadlineAt: args.staleDeadlineAt,
+      staleCheckToken: args.staleCheckToken,
+    });
+    return null;
+  },
+});
+
+export const raiseProviderPolicyConcurrencyFloorInternal = internalMutation({
+  args: {
+    minimumConcurrentRuns: v.number(),
+  },
+  returns: v.number(),
+  handler: async (ctx, args) => {
+    const policies = await ctx.db.query("providerPolicies").collect();
+    let patchedPolicies = 0;
+
+    for (const policy of policies) {
+      if (policy.maxConcurrentRuns >= args.minimumConcurrentRuns) {
+        continue;
+      }
+      await ctx.db.patch(policy._id, {
+        maxConcurrentRuns: args.minimumConcurrentRuns,
+        updatedAt: Date.now(),
+      });
+      patchedPolicies += 1;
+    }
+
+    return patchedPolicies;
+  },
+});
+
+export const repairRunConcurrencyStateForAllInternal = internalAction({
+  args: {},
+  returns: v.object({
+    patchedRuns: v.number(),
+    autoCanceledRuns: v.number(),
+    patchedPolicies: v.number(),
+  }),
+  handler: async (ctx) => {
+    let cursor: string | null = null;
+    let isDone = false;
+    let patchedRuns = 0;
+    let autoCanceledRuns = 0;
+    const now = Date.now();
+
+    const patchedPolicies: number = await ctx.runMutation(
+      internal.runs.raiseProviderPolicyConcurrencyFloorInternal,
+      {
+        minimumConcurrentRuns: MIN_CONCURRENT_RUNS,
+      },
+    );
+
+    while (!isDone) {
+      const page: {
+        page: Doc<"runs">[];
+        isDone: boolean;
+        continueCursor: string | null;
+      } = await ctx.runQuery(internal.runs.getRunsForConcurrencyReconciliationInternal, {
+        paginationOpts: {
+          numItems: 32,
+          cursor,
+        },
+      });
+
+      for (const run of page.page) {
+        const lastProgressAt = run.lastProgressAt ?? run.updatedAt;
+        const timeoutMs = staleTimeoutMsForStatus(run.status);
+        const staleDeadlineAt =
+          typeof timeoutMs === "number" ? lastProgressAt + timeoutMs : undefined;
+        const consumesConcurrencySlot = consumesConcurrencySlotForStatus(run.status);
+        const staleCheckToken =
+          typeof staleDeadlineAt === "number"
+            ? run.staleCheckToken ?? buildStaleCheckToken(now)
+            : undefined;
+
+        if (shouldAutoCancelStaleRun({ status: run.status, staleDeadlineAt }, now)) {
+          await ctx.runMutation(internal.runs.handleScheduledStaleRunCheckInternal, {
+            runId: run._id,
+            staleCheckToken: run.staleCheckToken ?? staleCheckToken ?? buildStaleCheckToken(now),
+          });
+          autoCanceledRuns += 1;
+          continue;
+        }
+
+        if (
+          run.consumesConcurrencySlot !== consumesConcurrencySlot ||
+          run.lastProgressAt !== lastProgressAt ||
+          run.staleDeadlineAt !== staleDeadlineAt ||
+          run.staleCheckToken !== staleCheckToken
+        ) {
+          await ctx.runMutation(internal.runs.repairRunConcurrencyStateInternal, {
+            runId: run._id,
+            consumesConcurrencySlot,
+            lastProgressAt,
+            staleDeadlineAt,
+            staleCheckToken,
+          });
+          patchedRuns += 1;
+        } else if (run.status === "paused" || run.status === "awaiting_human_critique") {
+          await ctx.runMutation(internal.runs.repairRunConcurrencyStateInternal, {
+            runId: run._id,
+            consumesConcurrencySlot,
+            lastProgressAt,
+            staleDeadlineAt,
+            staleCheckToken,
+          });
+        }
+      }
+
+      cursor = page.continueCursor;
+      isDone = page.isDone;
+    }
+
+    return {
+      patchedRuns,
+      autoCanceledRuns,
+      patchedPolicies,
+    };
+  },
+});
+
 export const getHistoricalRepairPageInternal = internalQuery({
   args: {
     paginationOpts: paginationOptsValidator,
@@ -3115,6 +3725,10 @@ export const getHistoricalRepairPageInternal = internalQuery({
       completedParticipantCount: number;
       failedParticipantCount: number;
       humanCritiqueCount: number;
+      consumesConcurrencySlot: boolean;
+      lastProgressAt: number;
+      staleDeadlineAt?: number;
+      staleCheckToken?: string;
       nextStatus?: Doc<"runs">["status"];
       nextCurrentStep?: string;
       nextError?: string;
@@ -3148,15 +3762,32 @@ export const getHistoricalRepairPageInternal = internalQuery({
 
       const validFinalOutcome = hasValidFinalOutcome(run, participants);
       const winner = validFinalOutcome ? inferWinnerFromParticipants(run, participants) : { modelId: undefined, modelName: undefined };
+      const lastProgressAt = run.lastProgressAt ?? run.updatedAt;
+      const timeoutMs = staleTimeoutMsForStatus(run.status);
+      const staleDeadlineAt =
+        typeof timeoutMs === "number" ? lastProgressAt + timeoutMs : undefined;
+      const staleCheckToken =
+        typeof staleDeadlineAt === "number"
+          ? run.staleCheckToken ?? buildStaleCheckToken(lastProgressAt)
+          : undefined;
       const nextStatus =
         validFinalOutcome && (run.status === "dead_lettered" || run.status === "partial")
           ? "complete"
           : undefined;
+      const nextCurrentStep =
+        nextStatus === "complete"
+          ? "Benchmark complete!"
+          : undefined;
+      const nextError = nextStatus === "complete" ? undefined : undefined;
 
       const needsRepair =
         run.completedParticipantCount !== completedParticipantCount ||
         run.failedParticipantCount !== failedParticipantCount ||
         run.humanCritiqueCount !== humanCritiqueCount ||
+        run.consumesConcurrencySlot !== consumesConcurrencySlotForStatus(run.status) ||
+        run.lastProgressAt !== lastProgressAt ||
+        run.staleDeadlineAt !== staleDeadlineAt ||
+        run.staleCheckToken !== staleCheckToken ||
         nextStatus !== undefined ||
         (validFinalOutcome &&
           (!run.finalWinnerModelId || !run.finalWinnerName) &&
@@ -3171,9 +3802,13 @@ export const getHistoricalRepairPageInternal = internalQuery({
         completedParticipantCount,
         failedParticipantCount,
         humanCritiqueCount,
+        consumesConcurrencySlot: consumesConcurrencySlotForStatus(run.status),
+        lastProgressAt,
+        staleDeadlineAt,
+        staleCheckToken,
         nextStatus,
-        nextCurrentStep: nextStatus ? "Benchmark complete!" : undefined,
-        nextError: nextStatus ? undefined : undefined,
+        nextCurrentStep,
+        nextError,
         finalWinnerModelId: winner.modelId,
         finalWinnerName: winner.modelName,
       });
@@ -3204,6 +3839,10 @@ export const applyHistoricalRepairBatchInternal = internalMutation({
       completedParticipantCount: number;
       failedParticipantCount: number;
       humanCritiqueCount: number;
+      consumesConcurrencySlot: boolean;
+      lastProgressAt: number;
+      staleDeadlineAt?: number;
+      staleCheckToken?: string;
       nextStatus?: Doc<"runs">["status"];
       nextCurrentStep?: string;
       nextError?: string;
@@ -3225,6 +3864,18 @@ export const applyHistoricalRepairBatchInternal = internalMutation({
       if (run.humanCritiqueCount !== rawRepair.humanCritiqueCount) {
         patch.humanCritiqueCount = rawRepair.humanCritiqueCount;
       }
+      if (run.consumesConcurrencySlot !== rawRepair.consumesConcurrencySlot) {
+        patch.consumesConcurrencySlot = rawRepair.consumesConcurrencySlot;
+      }
+      if (run.lastProgressAt !== rawRepair.lastProgressAt) {
+        patch.lastProgressAt = rawRepair.lastProgressAt;
+      }
+      if (run.staleDeadlineAt !== rawRepair.staleDeadlineAt) {
+        patch.staleDeadlineAt = rawRepair.staleDeadlineAt;
+      }
+      if (run.staleCheckToken !== rawRepair.staleCheckToken) {
+        patch.staleCheckToken = rawRepair.staleCheckToken;
+      }
       if (rawRepair.finalWinnerModelId && run.finalWinnerModelId !== rawRepair.finalWinnerModelId) {
         patch.finalWinnerModelId = rawRepair.finalWinnerModelId;
       }
@@ -3245,16 +3896,15 @@ export const applyHistoricalRepairBatchInternal = internalMutation({
       patch.updatedAt = Math.max(run.updatedAt, now);
       await ctx.db.patch(run._id, patch);
       patchedRuns += 1;
+      await scheduleRunStaleCheck(ctx, {
+        runId: run._id,
+        staleDeadlineAt: rawRepair.staleDeadlineAt,
+        staleCheckToken: rawRepair.staleCheckToken,
+      });
 
       if (rawRepair.nextStatus && run.status !== rawRepair.nextStatus) {
         statusRepairs += 1;
-        const searchDoc = await ctx.db
-          .query("runSearchDocs")
-          .withIndex("by_run", (q) => q.eq("runId", run._id))
-          .unique();
-        if (searchDoc && searchDoc.status !== rawRepair.nextStatus) {
-          await ctx.db.patch(searchDoc._id, { status: rawRepair.nextStatus });
-        }
+        await syncRunSearchDocStatus(ctx, run._id, rawRepair.nextStatus);
 
         const dayKey = dayKeyFromTimestamp(run.createdAt);
         const categoryStats = await ctx.db
@@ -3288,6 +3938,14 @@ export const applyHistoricalRepairBatchInternal = internalMutation({
           },
           createdAt: now,
         });
+
+        if (rawRepair.nextStatus === "complete") {
+          await finalizeBenchmarkJob(ctx, {
+            runId: run._id,
+            status: "complete",
+            completedAt: now,
+          });
+        }
       }
     }
 
@@ -3300,6 +3958,9 @@ export const repairHistoricalRunAccountingInternal = internalAction({
   returns: v.object({
     patchedRuns: v.number(),
     statusRepairs: v.number(),
+    concurrencyPatchedRuns: v.number(),
+    autoCanceledRuns: v.number(),
+    patchedPolicies: v.number(),
   }),
   handler: async (ctx) => {
     let cursor: string | null = null;
@@ -3332,11 +3993,20 @@ export const repairHistoricalRunAccountingInternal = internalAction({
       isDone = page.isDone;
     }
 
+    const concurrencyRepair: {
+      patchedRuns: number;
+      autoCanceledRuns: number;
+      patchedPolicies: number;
+    } = await ctx.runAction(internal.runs.repairRunConcurrencyStateForAllInternal, {});
+
     await ctx.runAction(internal.leaderboards.rebuildSnapshotsInternal, {});
 
     return {
       patchedRuns,
       statusRepairs,
+      concurrencyPatchedRuns: concurrencyRepair.patchedRuns,
+      autoCanceledRuns: concurrencyRepair.autoCanceledRuns,
+      patchedPolicies: concurrencyRepair.patchedPolicies,
     };
   },
 });
