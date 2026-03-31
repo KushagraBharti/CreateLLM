@@ -1,4 +1,4 @@
-import { NextResponse, type NextRequest, type NextFetchEvent } from "next/server";
+import { NextResponse, type NextFetchEvent, type NextRequest } from "next/server";
 import {
   convexAuthNextjsMiddleware,
   nextjsMiddlewareRedirect,
