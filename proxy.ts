@@ -1,4 +1,4 @@
-import { NextResponse, type NextRequest } from "next/server";
+import { NextResponse, type NextRequest, type NextFetchEvent } from "next/server";
 import {
   convexAuthNextjsMiddleware,
   nextjsMiddlewareRedirect,
@@ -17,7 +17,7 @@ function isProtectedApi(pathname: string) {
   return pathname === "/api/benchmark" || pathname.startsWith("/api/benchmark/");
 }
 
-const authMiddleware = convexAuthNextjsMiddleware(async (request, { convexAuth }) => {
+const authProxy = convexAuthNextjsMiddleware(async (request, { convexAuth }) => {
   const pathname = request.nextUrl.pathname;
   if (!(isProtectedPage(pathname) || isProtectedApi(pathname))) {
     return NextResponse.next({
@@ -47,9 +47,9 @@ const authMiddleware = convexAuthNextjsMiddleware(async (request, { convexAuth }
   );
 });
 
-export default async function middleware(request: NextRequest, event: unknown) {
+export default async function proxy(request: NextRequest, event: NextFetchEvent) {
   const requestId = request.headers.get("x-request-id") ?? crypto.randomUUID();
-  const response = (await authMiddleware(request, event as never)) ?? NextResponse.next();
+  const response = (await authProxy(request, event)) ?? NextResponse.next();
   response.headers.set("x-request-id", requestId);
 
   console.info(
